@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>MetroMate174</title>
+
+    <link rel="manifest" href="manifest.json">
+
+    <link rel="stylesheet" href="style.css">
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+
+    <meta name="theme-color" content="#0f172a">
+
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+</head>
+
+<body>
+
+<header>
+
+    <h1>🚌 MetroMate174</h1>
+
+    <p>My Personal Route 174 Dashboard</p>
+
+    <div id="clock"></div>
+
+    <div id="updated">Loading...</div>
+
+</header>
+
+
+<div class="container">
+
+    <!-- LIVE BUS MAP -->
+
+    <section class="card">
+
+        <h2>🛰️ Live Route 174</h2>
+
+        <div id="map"></div>
+
+        <div id="liveBusInfo">
+
+            <strong>Status:</strong> Connecting...
+
+        </div>
+
+    </section>
+
+
+    <!-- OUTBOUND -->
+
+    <section class="card">
+
+        <h2>🏠 Home ➜ City</h2>
+
+        <h3>Stop 20 Lower North East Rd</h3>
+
+        <table id="outboundTable">
+
+            <thead>
+
+            <tr>
+                <th>Bus</th>
+                <th>Arrival</th>
+                <th>Minutes</th>
+            </tr>
+
+            </thead>
+
+            <tbody>
+
+            <tr>
+                <td colspan="3">Loading...</td>
+            </tr>
+
+            </tbody>
+
+        </table>
+
+    </section>
+
+
+    <!-- INBOUND -->
+
+    <section class="card">
+
+        <h2>🏢 City ➜ Home</h2>
+
+        <h3>Stop G1 North Tce</h3>
+
+        <table id="inboundTable">
+
+            <thead>
+
+            <tr>
+                <th>Bus</th>
+                <th>Arrival</th>
+                <th>Minutes</th>
+            </tr>
+
+            </thead>
+
+            <tbody>
+
+            <tr>
+                <td colspan="3">Loading...</td>
+            </tr>
+
+            </tbody>
+
+        </table>
+
+    </section>
+
+</div>
+
+
+<footer>
+
+    Route 174 • Adelaide Metro • App by Susith Athukorala ©
+
+</footer>
+
+<!-- Leaflet JS -->
+
+<script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin="">
+</script>
+
+<script src="app.js"></script>
+
+</body>
+</html>
