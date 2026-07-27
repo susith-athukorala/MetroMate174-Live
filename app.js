@@ -14,7 +14,7 @@ const API =
 // ======================================
 
 const VEHICLE_API =
-"https://gtfs.adelaidemetro.com.au/v1/realtime/vehicle_positions/debug";
+"https://metromate174-proxy.susithathukorala-8d7.workers.dev/";
 
 let map;
 
