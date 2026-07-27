@@ -14,7 +14,7 @@ const API =
 // ======================================
 
 const VEHICLE_API =
-"https://api-cf-au5.anytrip.com.au/api/v3/region/au5/vehicles?routeGroupIds=au5:buses:174";
+"https://gtfs.adelaidemetro.com.au/v1/realtime/vehicle_positions/debug";
 
 let map;
 
@@ -116,10 +116,7 @@ async function loadVehicles() {
 
     try {
 
-        const url =
-        "https://gtfs.adelaidemetro.com.au/v1/realtime/vehicle_positions/debug";
-
-        const response = await fetch(url);
+        const response = await fetch(VEHICLE_API);
 
         console.log("Status:", response.status);
 
@@ -128,9 +125,9 @@ async function loadVehicles() {
         console.log(text.substring(0,500));
 
     }
-    catch(err){
+    catch(error){
 
-        console.error(err);
+        console.error(error);
 
     }
 
