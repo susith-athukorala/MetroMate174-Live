@@ -109,6 +109,33 @@ function initialiseMap(){
 }
 
 // -------------------------------
+// Load Live Vehicles
+// -------------------------------
+
+async function loadVehicles() {
+
+    try {
+
+        const response = await fetch(VEHICLE_API);
+
+        if (!response.ok) {
+            throw new Error("Vehicle API returned " + response.status);
+        }
+
+        const json = await response.json();
+
+        console.log("Vehicle API Response:", json);
+
+    }
+    catch (error) {
+
+        console.error("Vehicle API Error:", error);
+
+    }
+
+}
+
+// -------------------------------
 // Build Table
 // -------------------------------
 
@@ -213,6 +240,8 @@ async function loadDashboard(){
         "inboundTable",
         inbound
     );
+
+    await loadVehicles();
 
     document.getElementById(
         "updated"
