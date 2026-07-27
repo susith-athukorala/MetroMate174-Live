@@ -116,20 +116,21 @@ async function loadVehicles() {
 
     try {
 
-        const response = await fetch(VEHICLE_API);
+        const url =
+        "https://gtfs.adelaidemetro.com.au/v1/realtime/vehicle_positions/debug";
 
-        if (!response.ok) {
-            throw new Error("Vehicle API returned " + response.status);
-        }
+        const response = await fetch(url);
 
-        const json = await response.json();
+        console.log("Status:", response.status);
 
-        console.log("Vehicle API Response:", json);
+        const text = await response.text();
+
+        console.log(text.substring(0,500));
 
     }
-    catch (error) {
+    catch(err){
 
-        console.error("Vehicle API Error:", error);
+        console.error(err);
 
     }
 
