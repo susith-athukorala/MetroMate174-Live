@@ -120,30 +120,18 @@ async function loadVehicles() {
 
         const buses = await response.json();
 
-        // Remove buses that disappeared
-        Object.keys(busMarkers).forEach(id => {
+        // Track vehicles seen in this update
+        const activeVehicles = new Set();
 
-            if (!buses.find(bus => bus.vehicle === id)) {
-
-                map.removeLayer(busMarkers[id]);
-
-                delete busMarkers[id];
-
-            }
-
-        });
-
-        // Add / Update buses
         buses.forEach(bus => {
 
-            const latlng = [
-                bus.latitude,
-                bus.longitude
-            ];
+            activeVehicles.add(bus.vehicle);
+
+            const latlng = [bus.latitude, bus.longitude];
 
             const popup = `
                 <b>🚌 Route ${bus.route}</b><br>
-                Vehicle: ${bus.vehicle}<br>
+                Bus: ${bus.label}<br>
                 Speed: ${(bus.speed * 3.6).toFixed(1)} km/h<br>
                 Direction: ${bus.direction}<br>
                 Bearing: ${bus.bearing.toFixed(0)}°
@@ -151,31 +139,41 @@ async function loadVehicles() {
 
             if (busMarkers[bus.vehicle]) {
 
+                // Move existing marker
                 busMarkers[bus.vehicle].setLatLng(latlng);
-
                 busMarkers[bus.vehicle].setPopupContent(popup);
 
-            }
-            else {
+            } else {
 
-                busMarkers[bus.vehicle] =
-                console.log("Adding marker:", latlng);
-                    const busIcon = L.divIcon({
-                        html: "🚌",
-                        className: "bus-icon",
-                        iconSize: [30,30],
-                        iconAnchor: [15,15]
-                    });
+                // Create new marker once
+                const busIcon = L.divIcon({
+                    html: "🚌",
+                    className: "bus-icon",
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
 
-                    const marker = L.marker(latlng,{
+                busMarkers[bus.vehicle] = L.marker(latlng, {
                     icon: busIcon
-                    })
-                    .addTo(map)
-                    .bindPopup(popup);
+                })
+                .addTo(map)
+                .bindPopup(popup);
 
-busMarkers[bus.vehicle] = marker;
-                        .addTo(map)
-                        .bindPopup(popup);
+                console.log("Created marker:", bus.vehicle);
+
+            }
+
+        });
+
+        // Remove buses no longer present
+        Object.keys(busMarkers).forEach(vehicleId => {
+
+            if (!activeVehicles.has(vehicleId)) {
+
+                map.removeLayer(busMarkers[vehicleId]);
+                delete busMarkers[vehicleId];
+
+                console.log("Removed marker:", vehicleId);
 
             }
 
