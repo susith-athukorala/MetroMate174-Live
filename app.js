@@ -160,7 +160,20 @@ async function loadVehicles() {
 
                 busMarkers[bus.vehicle] =
                 console.log("Adding marker:", latlng);
-                    L.marker(latlng)
+                    const busIcon = L.divIcon({
+                        html: "🚌",
+                        className: "bus-icon",
+                        iconSize: [30,30],
+                        iconAnchor: [15,15]
+                    });
+
+                    const marker = L.marker(latlng,{
+                    icon: busIcon
+                    })
+                    .addTo(map)
+                    .bindPopup(popup);
+
+busMarkers[bus.vehicle] = marker;
                         .addTo(map)
                         .bindPopup(popup);
 
