@@ -159,6 +159,7 @@ async function loadVehicles() {
             else {
 
                 busMarkers[bus.vehicle] =
+                console.log("Adding marker:", latlng);
                     L.marker(latlng)
                         .addTo(map)
                         .bindPopup(popup);
