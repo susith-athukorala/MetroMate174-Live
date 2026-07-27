@@ -17,7 +17,7 @@ const VEHICLE_API =
 "https://metromate174-proxy.susithathukorala-8d7.workers.dev/";
 
 let map;
-
+let busMarkers = {};
 
 // -------------------------------
 // Live Clock
@@ -118,16 +118,59 @@ async function loadVehicles() {
 
         const response = await fetch(VEHICLE_API);
 
-        console.log("Status:", response.status);
+        const buses = await response.json();
 
-        const text = await response.text();
+        // Remove buses that disappeared
+        Object.keys(busMarkers).forEach(id => {
 
-        console.log(text.substring(0,500));
+            if (!buses.find(bus => bus.vehicle === id)) {
+
+                map.removeLayer(busMarkers[id]);
+
+                delete busMarkers[id];
+
+            }
+
+        });
+
+        // Add / Update buses
+        buses.forEach(bus => {
+
+            const latlng = [
+                bus.latitude,
+                bus.longitude
+            ];
+
+            const popup = `
+                <b>🚌 Route ${bus.route}</b><br>
+                Vehicle: ${bus.vehicle}<br>
+                Speed: ${(bus.speed * 3.6).toFixed(1)} km/h<br>
+                Direction: ${bus.direction}<br>
+                Bearing: ${bus.bearing.toFixed(0)}°
+            `;
+
+            if (busMarkers[bus.vehicle]) {
+
+                busMarkers[bus.vehicle].setLatLng(latlng);
+
+                busMarkers[bus.vehicle].setPopupContent(popup);
+
+            }
+            else {
+
+                busMarkers[bus.vehicle] =
+                    L.marker(latlng)
+                        .addTo(map)
+                        .bindPopup(popup);
+
+            }
+
+        });
 
     }
-    catch(error){
+    catch(err){
 
-        console.error(error);
+        console.error(err);
 
     }
 
