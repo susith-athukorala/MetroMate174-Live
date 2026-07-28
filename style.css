@@ -250,6 +250,10 @@ tbody tr:hover{
 
 }
 
+tbody tr.selected{
+    background:#2563eb;
+    color:white;
+}
 
 /* ======================================================
           COUNTDOWN BADGES

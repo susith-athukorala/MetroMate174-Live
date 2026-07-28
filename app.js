@@ -126,16 +126,24 @@ async function loadVehicles() {
 
         buses.forEach(bus => {
 
-            if (
-    selectedTripId &&
-    bus.tripId != selectedTripId
-){
-    return;
-}
+            console.log(
+        "Live trip:",
+        bus.tripId,
+        "Selected:",
+        selectedTripId);
 
-            activeVehicles.add(bus.vehicle);
+    // Always record that this vehicle exists
+    activeVehicles.add(bus.vehicle);
 
-            const latlng = [bus.latitude, bus.longitude];
+    // If a trip is selected, ignore all other buses
+    if (
+        selectedTripId &&
+        String(bus.tripId) !== selectedTripId
+    ){
+        return;
+    }
+
+    const latlng = [bus.latitude, bus.longitude];
 
             const popup = `
                 <b>🚌 Route ${bus.route}</b><br>
@@ -161,33 +169,40 @@ async function loadVehicles() {
                     iconAnchor: [15, 15]
                 });
 
-                busMarkers[bus.vehicle] = L.marker(latlng, {
-                    icon: busIcon
-                })
-                .addTo(map)
-                .bindPopup(popup);
+                const marker = L.marker(latlng, {
+    icon: busIcon
+})
+.addTo(map)
+.bindPopup(popup);
 
-                busMarkers[bus.vehicle] = marker;
+busMarkers[bus.vehicle] = marker;
 
-// Only zoom if this is the selected trip
-if (
-    selectedTripId &&
-    bus.tripId == selectedTripId &&
-    !map.getBounds().contains(latlng)
-) {
 
-    map.flyTo(latlng, 15, {
-        animate: true,
-        duration: 1
-    });
-
-    marker.openPopup();
-
-}
 
                 console.log("Created marker:", bus.vehicle);
 
             }
+
+
+// Only zoom if this is the selected trip
+if (
+    selectedTripId &&
+    String(bus.tripId) === selectedTripId
+) {
+
+    if (!map.getBounds().contains(latlng)) {
+
+        map.flyTo(latlng, 15, {
+            animate: true,
+            duration: 1
+        });
+
+        busMarkers[bus.vehicle].openPopup();
+
+    }
+
+}
+
 
         });
 
@@ -257,11 +272,32 @@ function populateTable(tableId,buses){
 
 row.onclick = () => {
 
-    selectedTripId = bus.trip_id;
+    selectedTripId = String(bus.trip_id);
 
-    loadVehicles();
+    console.log("Selected timetable trip:", selectedTripId);
+
+    document
+    .querySelectorAll("tbody tr")
+    .forEach(r => r.classList.remove("selected"));
+
+row.classList.add("selected");
+
+    Object.values(busMarkers).forEach(marker =>
+        map.removeLayer(marker)
+    );
+
+    busMarkers = {};
+
+    loadVehicles().catch(console.error);
 
 };
+
+// Restore selection after refresh
+if (String(bus.trip_id) === selectedTripId) {
+    row.classList.add("selected");
+}
+
+tbody.appendChild(row);
 
     });
 
