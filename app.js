@@ -18,6 +18,7 @@ const VEHICLE_API =
 
 let map;
 let busMarkers = {};
+let selectedTripId = null;
 
 // -------------------------------
 // Live Clock
@@ -125,6 +126,13 @@ async function loadVehicles() {
 
         buses.forEach(bus => {
 
+            if (
+    selectedTripId &&
+    bus.tripId != selectedTripId
+){
+    return;
+}
+
             activeVehicles.add(bus.vehicle);
 
             const latlng = [bus.latitude, bus.longitude];
@@ -158,6 +166,24 @@ async function loadVehicles() {
                 })
                 .addTo(map)
                 .bindPopup(popup);
+
+                busMarkers[bus.vehicle] = marker;
+
+// Only zoom if this is the selected trip
+if (
+    selectedTripId &&
+    bus.tripId == selectedTripId &&
+    !map.getBounds().contains(latlng)
+) {
+
+    map.flyTo(latlng, 15, {
+        animate: true,
+        duration: 1
+    });
+
+    marker.openPopup();
+
+}
 
                 console.log("Created marker:", bus.vehicle);
 
@@ -227,7 +253,15 @@ function populateTable(tableId,buses){
 
         `;
 
-        tbody.appendChild(row);
+        row.style.cursor = "pointer";
+
+row.onclick = () => {
+
+    selectedTripId = bus.trip_id;
+
+    loadVehicles();
+
+};
 
     });
 
