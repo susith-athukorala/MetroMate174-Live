@@ -306,6 +306,18 @@ row.onclick = () => {
 
     selectedTripId = String(bus.trip_id);
 
+    document.getElementById("trackingBus").textContent =
+    "🚌 Finding selected bus...";
+
+document.getElementById("trackingSpeed").textContent =
+    "⚡ Speed: --";
+
+document.getElementById("trackingDirection").textContent =
+    "➡️ Direction: --";
+
+document.getElementById("trackingTime").textContent =
+    "🕒 Updated: " + new Date().toLocaleTimeString("en-AU");
+
     console.log("Selected timetable trip:", selectedTripId);
 
     document
