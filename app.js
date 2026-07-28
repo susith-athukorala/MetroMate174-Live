@@ -121,6 +121,22 @@ async function loadVehicles() {
 
         const buses = await response.json();
 
+        if (!selectedTripId) {
+
+    document.getElementById("trackingBus").textContent =
+        `🚌 Showing ${buses.length} Route 174 buses`;
+
+    document.getElementById("trackingSpeed").textContent =
+        "⚡ Speed: --";
+
+    document.getElementById("trackingDirection").textContent =
+        "➡️ Direction: --";
+
+    document.getElementById("trackingTime").textContent =
+        "🕒 Updated: " + new Date().toLocaleTimeString("en-AU");
+
+}
+
         // Track vehicles seen in this update
         const activeVehicles = new Set();
 
@@ -184,12 +200,28 @@ busMarkers[bus.vehicle] = marker;
             }
 
 
-// Only zoom if this is the selected trip
+// Selected bus information
 if (
     selectedTripId &&
     String(bus.tripId) === selectedTripId
 ) {
 
+    // Update the live status panel
+    document.getElementById("trackingBus").textContent =
+        `🚌 Tracking Bus ${bus.label}`;
+
+    document.getElementById("trackingSpeed").textContent =
+        `⚡ Speed: ${(bus.speed * 3.6).toFixed(1)} km/h`;
+
+    document.getElementById("trackingDirection").textContent =
+        bus.direction == 0
+            ? "➡️ Direction: Paradise"
+            : "⬅️ Direction: City";
+
+    document.getElementById("trackingTime").textContent =
+        "🕒 Updated: " + new Date().toLocaleTimeString("en-AU");
+
+    // Follow the bus if it moves outside the map
     if (!map.getBounds().contains(latlng)) {
 
         map.flyTo(latlng, 15, {
