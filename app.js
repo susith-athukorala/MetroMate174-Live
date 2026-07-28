@@ -254,6 +254,8 @@ async function loadStop(stop){
 
         const services=json[2] || [];
 
+        console.log(services);
+
         return services
             .filter(x=>x.route_id==="174")
             .slice(0,10);
