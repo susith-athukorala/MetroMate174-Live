@@ -262,6 +262,46 @@ function distanceKm(lat1, lon1, lat2, lon2){
 
 
 // -------------------------------
+// Speed / heading / stops-away display
+// -------------------------------
+
+function bearingToCompass(bearing){
+
+    const directions =
+        ["N","NE","E","SE","S","SW","W","NW"];
+
+    const index = Math.round(bearing / 45) % 8;
+
+    return directions[index];
+
+}
+
+function stopsAwayLabel(stopsAway){
+
+    if (stopsAway === 0) return "Approaching your stop";
+    if (stopsAway === 1) return "1 stop away";
+
+    return `${stopsAway} stops away`;
+
+}
+
+function vehicleStatusLabel(vehicle){
+
+    const speedKmh = Math.round((vehicle.speed || 0) * 3.6);
+
+    if (speedKmh <= 2) return "stopped";
+
+    const compass =
+        vehicle.bearing !== null && vehicle.bearing !== undefined
+            ? ` heading ${bearingToCompass(vehicle.bearing)}`
+            : "";
+
+    return `${speedKmh} km/h${compass}`;
+
+}
+
+
+// -------------------------------
 // Live bus mini-maps
 // -------------------------------
 
@@ -352,23 +392,19 @@ function updateBusMap(stopKey, distanceElementId, focus){
         return;
     }
 
-    const km = distanceKm(
-        vehicle.lat, vehicle.lon,
-        stop.lat, stop.lon
-    );
+    const stopsAway = typeof trip.stopsAway === "number" ? trip.stopsAway : null;
 
-    const distanceLabel =
-        km < 1
-            ? `${Math.round(km * 1000)} m away`
-            : `${km.toFixed(1)} km away`;
+    const statusText =
+        stopsAway !== null
+            ? `🚌 ${stopsAwayLabel(stopsAway)} — ${vehicleStatusLabel(vehicle)}`
+            : `🚌 ${vehicleStatusLabel(vehicle)} (live GPS)`;
 
-    distanceEl.textContent =
-        `🚌 Next bus is ${distanceLabel} (live GPS)`;
+    distanceEl.textContent = statusText;
     distanceEl.classList.add("live");
 
     entry.busMarker.setLatLng([vehicle.lat, vehicle.lon]);
     entry.busMarker.setPopupContent(
-        `Route 174 — ${distanceLabel}`
+        `Route 174 — ${stopsAway !== null ? stopsAwayLabel(stopsAway) : "en route"}, ${vehicleStatusLabel(vehicle)}`
     );
 
     if (!entry.busVisible) {
