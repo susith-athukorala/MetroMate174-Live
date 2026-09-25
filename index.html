@@ -40,29 +40,6 @@
 
 <div class="container">
 
-    <!-- LIVE BUS MAP -->
-
-    <section class="card">
-
-        <h2>🛰️ Live Route 174</h2>
-
-        <div id="map"></div>
-
-        <div id="liveBusInfo">
-
-    <div id="statusIndicator">🟢 LIVE</div>
-
-    <div id="trackingBus">Showing all Route 174 buses</div>
-
-    <div id="trackingSpeed">Speed: -- km/h</div>
-
-    <div id="trackingDirection">Direction: --</div>
-
-    <div id="trackingTime">Updated: --</div>
-
-</div>
-
-    </section>
 
 
     <!-- OUTBOUND -->
@@ -71,7 +48,7 @@
 
         <h2>🏠 Home ➜ City</h2>
 
-        <h3>Stop 20 Lower North East Rd</h3>
+        <h3>Stop 21 Lower North East Rd</h3>
 
         <table id="outboundTable">
 
@@ -79,8 +56,8 @@
 
             <tr>
                 <th>Bus</th>
-                <th>Arrival</th>
-                <th>Minutes</th>
+                <th>Expected Arrival</th>
+                <th>Wait Time</th>
             </tr>
 
             </thead>
@@ -88,12 +65,15 @@
             <tbody>
 
             <tr>
-                <td colspan="3">Loading...</td>
+                <td colspan="4">Loading...</td>
             </tr>
 
             </tbody>
 
         </table>
+
+        <div id="outboundMap" class="mini-map"></div>
+        <p id="outboundDistance" class="distance-text">Locating next bus...</p>
 
     </section>
 
@@ -104,7 +84,7 @@
 
         <h2>🏢 City ➜ Home</h2>
 
-        <h3>Stop G1 North Tce</h3>
+        <h3>Stop I1 North Tce</h3>
 
         <table id="inboundTable">
 
@@ -112,8 +92,8 @@
 
             <tr>
                 <th>Bus</th>
-                <th>Arrival</th>
-                <th>Minutes</th>
+                <th>Expected Arrival</th>
+                <th>Wait Time</th>
             </tr>
 
             </thead>
@@ -121,12 +101,15 @@
             <tbody>
 
             <tr>
-                <td colspan="3">Loading...</td>
+                <td colspan="4">Loading...</td>
             </tr>
 
             </tbody>
 
         </table>
+
+        <div id="inboundMap" class="mini-map"></div>
+        <p id="inboundDistance" class="distance-text">Locating next bus...</p>
 
     </section>
 
