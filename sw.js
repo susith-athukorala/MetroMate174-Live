@@ -3,7 +3,7 @@
 // Version 1.0
 // =======================================
 
-const CACHE_NAME = "metromate174-v1";
+const CACHE_NAME = "metromate174-v2";
 
 const FILES_TO_CACHE = [
     "./",
