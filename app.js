@@ -7,7 +7,7 @@ const OUTBOUND_STOP = "12429";
 const INBOUND_STOP = "13278";
 
 const REALTIME_API =
-"https://trip-updates-worker.susithathukorala-8d7.workers.dev/?stop=";
+"https://metromate-tripupdates.susithathukorala-8d7.workers.dev/?stop=";
 const API =
     "https://api-cloudfront.adelaidemetro.com.au/stops/next-scheduled-services?stop=";
 
@@ -31,6 +31,114 @@ const STOPS = {
     }
 
 };
+
+
+// -------------------------------
+// Bus tracking
+//
+// The Adelaide Metro "next scheduled services" list drops a bus the
+// instant its scheduled time passes, even if the real bus is still a
+// minute or two from the stop. To keep it visible until it actually
+// gets there, once we lock onto a trip_id we keep following that same
+// bus (via the worker's realtime feed) rather than jumping to
+// whatever the schedule API now calls "next" — and only let go of it
+// once its live GPS is close enough to the stop to count as arrived.
+// -------------------------------
+
+const ARRIVED_DISTANCE_KM = 0.12; // ~120m — close enough to call it arrived
+const MAX_MISSED_CYCLES = 6;      // ~1 min of gaps in the feed before giving up
+
+const tracked = {
+    [OUTBOUND_STOP]: { tripId: null, snapshot: null, missed: 0 },
+    [INBOUND_STOP]: { tripId: null, snapshot: null, missed: 0 }
+};
+
+function resolveFocusBus(stopKey, buses, realtime){
+
+    const state = tracked[stopKey];
+    const stop = STOPS[stopKey];
+
+    let trip = state.tripId &&
+        realtime.find(t => String(t.tripId) === String(state.tripId));
+
+    if (trip) {
+
+        state.missed = 0;
+
+        if (trip.vehicle) {
+
+            const km = distanceKm(
+                trip.vehicle.lat, trip.vehicle.lon,
+                stop.lat, stop.lon
+            );
+
+            if (km <= ARRIVED_DISTANCE_KM) {
+
+                // It made it to the stop — stop tracking it, the
+                // next cycle will pick up whichever bus is next.
+                state.tripId = null;
+                state.snapshot = null;
+                trip = null;
+
+            }
+
+        }
+
+    } else if (state.tripId) {
+
+        // Missing from this cycle — could be a brief gap in the
+        // feed, could mean the trip has genuinely ended. Give it a
+        // few cycles before giving up on it.
+        state.missed++;
+
+        if (state.missed > MAX_MISSED_CYCLES) {
+
+            state.tripId = null;
+            state.snapshot = null;
+            state.missed = 0;
+
+        }
+
+    }
+
+    if (state.tripId) {
+
+        const bus = buses.find(
+            b => String(b.trip_id) === String(state.tripId)
+        ) || state.snapshot;
+
+        return { bus, trip: trip || null };
+
+    }
+
+    // Nothing tracked yet — adopt the next scheduled bus.
+    const candidate = buses[0];
+
+    if (!candidate) return { bus: null, trip: null };
+
+    state.tripId = candidate.trip_id;
+    state.snapshot = candidate;
+    state.missed = 0;
+
+    const candidateTrip = realtime.find(
+        t => String(t.tripId) === String(candidate.trip_id)
+    );
+
+    return { bus: candidate, trip: candidateTrip || null };
+
+}
+
+function mergeFocusIntoList(focusBus, buses){
+
+    if (!focusBus) return buses;
+
+    const alreadyThere = buses.some(
+        b => String(b.trip_id) === String(focusBus.trip_id)
+    );
+
+    return alreadyThere ? buses : [focusBus, ...buses];
+
+}
 
 
 // -------------------------------
@@ -97,8 +205,15 @@ function formatTime(timeString){
 function badge(minutes){
 
     let colour="grey";
+    let label = `${minutes} min`;
 
-    if(minutes<=3){
+    if(minutes<=0){
+
+        colour="red";
+        label="Due";
+
+    }
+    else if(minutes<=3){
 
         colour="red";
 
@@ -115,7 +230,7 @@ function badge(minutes){
     }
 
     return `<span class="badge ${colour}">
-                ${minutes} min
+                ${label}
             </span>`;
 
 }
@@ -195,7 +310,7 @@ function initMap(stopKey, mapElementId){
 
 }
 
-function updateBusMap(stopKey, distanceElementId, topBus, realtime){
+function updateBusMap(stopKey, distanceElementId, focus){
 
     const entry = maps[stopKey];
     const distanceEl = document.getElementById(distanceElementId);
@@ -204,10 +319,8 @@ function updateBusMap(stopKey, distanceElementId, topBus, realtime){
 
     const stop = STOPS[stopKey];
 
-    const trip = topBus && realtime.find(
-        t => String(t.tripId) === String(topBus.trip_id)
-    );
-
+    const topBus = focus && focus.bus;
+    const trip = focus && focus.trip;
     const vehicle = trip && trip.vehicle;
 
     if (!topBus) {
@@ -453,30 +566,34 @@ const outboundRealtime =
 const inboundRealtime =
     await loadRealtime(INBOUND_STOP);
 
+const outboundFocus =
+    resolveFocusBus(OUTBOUND_STOP, outbound, outboundRealtime);
+
+const inboundFocus =
+    resolveFocusBus(INBOUND_STOP, inbound, inboundRealtime);
+
 populateTable(
     "outboundTable",
-    outbound,
+    mergeFocusIntoList(outboundFocus.bus, outbound),
     outboundRealtime
 );
 
 populateTable(
     "inboundTable",
-    inbound,
+    mergeFocusIntoList(inboundFocus.bus, inbound),
     inboundRealtime
 );
 
 updateBusMap(
     OUTBOUND_STOP,
     "outboundDistance",
-    outbound[0],
-    outboundRealtime
+    outboundFocus
 );
 
 updateBusMap(
     INBOUND_STOP,
     "inboundDistance",
-    inbound[0],
-    inboundRealtime
+    inboundFocus
 );
 
     document.getElementById(
