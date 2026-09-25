@@ -7,7 +7,7 @@ const OUTBOUND_STOP = "12429";
 const INBOUND_STOP = "13278";
 
 const REALTIME_API =
-"https://metromate-tripupdates.susithathukorala-8d7.workers.dev/?stop=";
+"https://trip-updates-worker.susithathukorala-8d7.workers.dev/?stop=";
 const API =
     "https://api-cloudfront.adelaidemetro.com.au/stops/next-scheduled-services?stop=";
 
