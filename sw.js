@@ -3,7 +3,7 @@
 // Version 1.0
 // =======================================
 
-const CACHE_NAME = "metromate174-v2";
+const CACHE_NAME = "metromate174-v3";
 
 const FILES_TO_CACHE = [
     "./",
@@ -75,8 +75,12 @@ self.addEventListener("activate", event => {
 
 self.addEventListener("fetch", event => {
 
-    // Never cache Adelaide Metro API responses.
-    if(event.request.url.includes("api-cloudfront.adelaidemetro.com.au")){
+    // Never cache Adelaide Metro / realtime API responses — this
+    // dashboard is only useful with fresh data.
+    if(
+        event.request.url.includes("api-cloudfront.adelaidemetro.com.au") ||
+        event.request.url.includes("workers.dev")
+    ){
 
         event.respondWith(fetch(event.request));
 
@@ -84,15 +88,27 @@ self.addEventListener("fetch", event => {
 
     }
 
+    // Network-first for the app shell itself (index.html, style.css,
+    // app.js, ...): always try to fetch the latest version first, so
+    // a new deploy is picked up immediately instead of quietly
+    // serving a stale cached copy. Only fall back to the cache if the
+    // network request fails (e.g. offline).
     event.respondWith(
 
-        caches.match(event.request)
+        fetch(event.request)
 
             .then(response => {
 
-                return response || fetch(event.request);
+                const copy = response.clone();
+
+                caches.open(CACHE_NAME)
+                    .then(cache => cache.put(event.request, copy));
+
+                return response;
 
             })
+
+            .catch(() => caches.match(event.request))
 
     );
 
