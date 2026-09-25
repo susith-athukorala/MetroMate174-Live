@@ -3,22 +3,54 @@
 // Adelaide Metro Dashboard
 // ======================================
 
-const OUTBOUND_STOP = "12501";
-const INBOUND_STOP = "13284";
+const OUTBOUND_STOP = "12429";
+const INBOUND_STOP = "13278";
 
+const REALTIME_API =
+"https://trip-updates-worker.susithathukorala-8d7.workers.dev/?stop=";
 const API =
     "https://api-cloudfront.adelaidemetro.com.au/stops/next-scheduled-services?stop=";
 
-// ======================================
-// Live Vehicle API
-// ======================================
 
-const VEHICLE_API =
-"https://metromate174-proxy.susithathukorala-8d7.workers.dev/";
+// -------------------------------
+// Stop locations (for the live map + distance)
+// -------------------------------
 
-let map;
-let busMarkers = {};
-let selectedTripId = null;
+const STOPS = {
+
+    [OUTBOUND_STOP]: {
+        name: "Stop 21 Lower North East Rd",
+        lat: -34.880273,
+        lon: 138.662438
+    },
+
+    [INBOUND_STOP]: {
+        name: "Stop I1 North Tce",
+        lat: -34.920937,
+        lon: 138.608466
+    }
+
+};
+
+
+// -------------------------------
+// Register service worker
+// -------------------------------
+
+if ("serviceWorker" in navigator) {
+
+    window.addEventListener("load", () => {
+
+        navigator.serviceWorker
+            .register("./sw.js")
+            .catch(err =>
+                console.error("Service worker registration failed:", err)
+            );
+
+    });
+
+}
+
 
 // -------------------------------
 // Live Clock
@@ -66,7 +98,7 @@ function badge(minutes){
 
     let colour="grey";
 
-    if(minutes<=5){
+    if(minutes<=3){
 
         colour="red";
 
@@ -88,195 +120,176 @@ function badge(minutes){
 
 }
 
+
+
 // -------------------------------
-// Initialise Leaflet Map
+// Distance between two GPS points (Haversine, in km)
 // -------------------------------
 
-function initialiseMap(){
+function distanceKm(lat1, lon1, lat2, lon2){
 
-    map = L.map("map").setView(
-        [-34.9213,138.6380],
-        13
-    );
+    const R = 6371;
+
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) *
+        Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+
+}
+
+
+// -------------------------------
+// Live bus mini-maps
+// -------------------------------
+
+const busIcon = L.divIcon({
+    className: "",
+    html: "🚌",
+    iconSize: [28, 28],
+    iconAnchor: [14, 14]
+});
+
+const stopIcon = L.divIcon({
+    className: "",
+    html: "📍",
+    iconSize: [26, 26],
+    iconAnchor: [13, 26]
+});
+
+const maps = {};
+
+function initMap(stopKey, mapElementId){
+
+    const stop = STOPS[stopKey];
+
+    const map = L.map(mapElementId, {
+        zoomControl: false,
+        attributionControl: false
+    }).setView([stop.lat, stop.lon], 14);
 
     L.tileLayer(
         "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        {
-            attribution:
-            "&copy; OpenStreetMap contributors"
-        }
+        { maxZoom: 18 }
     ).addTo(map);
 
-}
+    L.control.attribution({ prefix: false })
+        .addAttribution("&copy; OpenStreetMap contributors")
+        .addTo(map);
 
-// -------------------------------
-// Load Live Vehicles
-// -------------------------------
+    const stopMarker = L.marker([stop.lat, stop.lon], { icon: stopIcon })
+        .addTo(map)
+        .bindPopup(stop.name);
 
-async function loadVehicles() {
+    const busMarker = L.marker([stop.lat, stop.lon], { icon: busIcon })
+        .bindPopup("Route 174");
 
-    try {
-
-        const response = await fetch(VEHICLE_API);
-
-        const buses = await response.json();
-
-        if (!selectedTripId) {
-
-    document.getElementById("trackingBus").textContent =
-        `🚌 Showing ${buses.length} Route 174 buses`;
-
-    document.getElementById("trackingSpeed").textContent =
-        "⚡ Speed: --";
-
-    document.getElementById("trackingDirection").textContent =
-        "➡️ Direction: --";
-
-    document.getElementById("trackingTime").textContent =
-        "🕒 Updated: " + new Date().toLocaleTimeString("en-AU");
+    maps[stopKey] = { map, stopMarker, busMarker, busVisible: false };
 
 }
 
-        // Track vehicles seen in this update
-        const activeVehicles = new Set();
+function updateBusMap(stopKey, distanceElementId, topBus, realtime){
 
-        buses.forEach(bus => {
+    const entry = maps[stopKey];
+    const distanceEl = document.getElementById(distanceElementId);
 
-            console.log(
-        "Live trip:",
-        bus.tripId,
-        "Selected:",
-        selectedTripId);
+    if (!entry) return;
 
-    // Always record that this vehicle exists
-    activeVehicles.add(bus.vehicle);
+    const stop = STOPS[stopKey];
 
-    // If a trip is selected, ignore all other buses
-    if (
-        selectedTripId &&
-        String(bus.tripId) !== selectedTripId
-    ){
+    const trip = topBus && realtime.find(
+        t => String(t.tripId) === String(topBus.trip_id)
+    );
+
+    const vehicle = trip && trip.vehicle;
+
+    if (!topBus) {
+
+        distanceEl.textContent = "No upcoming Route 174 services";
+        distanceEl.classList.remove("live");
+
+        if (entry.busVisible) {
+            entry.map.removeLayer(entry.busMarker);
+            entry.busVisible = false;
+        }
+
         return;
     }
 
-    const latlng = [bus.latitude, bus.longitude];
+    if (!vehicle) {
 
-            const popup = `
-                <b>🚌 Route ${bus.route}</b><br>
-                Bus: ${bus.label}<br>
-                Speed: ${(bus.speed * 3.6).toFixed(1)} km/h<br>
-                Direction: ${bus.direction}<br>
-                Bearing: ${bus.bearing.toFixed(0)}°
-            `;
+        distanceEl.textContent =
+            "Live GPS unavailable for the next bus — showing stop only";
+        distanceEl.classList.remove("live");
 
-            if (busMarkers[bus.vehicle]) {
+        if (entry.busVisible) {
+            entry.map.removeLayer(entry.busMarker);
+            entry.busVisible = false;
+        }
 
-                // Move existing marker
-                busMarkers[bus.vehicle].setLatLng(latlng);
-                busMarkers[bus.vehicle].setPopupContent(popup);
+        entry.map.setView([stop.lat, stop.lon], 14);
 
-            } else {
-
-                // Create new marker once
-                const busIcon = L.divIcon({
-                    html: "🚌",
-                    className: "bus-icon",
-                    iconSize: [30, 30],
-                    iconAnchor: [15, 15]
-                });
-
-                const marker = L.marker(latlng, {
-    icon: busIcon
-})
-.addTo(map)
-.bindPopup(popup);
-
-busMarkers[bus.vehicle] = marker;
-
-
-
-                console.log("Created marker:", bus.vehicle);
-
-            }
-
-
-// Selected bus information
-if (
-    selectedTripId &&
-    String(bus.tripId) === selectedTripId
-) {
-
-    // Update the live status panel
-    document.getElementById("trackingBus").textContent =
-        `🚌 Tracking Bus ${bus.label}`;
-
-    document.getElementById("trackingSpeed").textContent =
-        `⚡ Speed: ${(bus.speed * 3.6).toFixed(1)} km/h`;
-
-    document.getElementById("trackingDirection").textContent =
-        bus.direction == 0
-            ? "➡️ Direction: Paradise"
-            : "⬅️ Direction: City";
-
-    document.getElementById("trackingTime").textContent =
-        "🕒 Updated: " + new Date().toLocaleTimeString("en-AU");
-
-    // Follow the bus if it moves outside the map
-    if (!map.getBounds().contains(latlng)) {
-
-        map.flyTo(latlng, 15, {
-            animate: true,
-            duration: 1
-        });
-
-        busMarkers[bus.vehicle].openPopup();
-
+        return;
     }
+
+    const km = distanceKm(
+        vehicle.lat, vehicle.lon,
+        stop.lat, stop.lon
+    );
+
+    const distanceLabel =
+        km < 1
+            ? `${Math.round(km * 1000)} m away`
+            : `${km.toFixed(1)} km away`;
+
+    distanceEl.textContent =
+        `🚌 Next bus is ${distanceLabel} (live GPS)`;
+    distanceEl.classList.add("live");
+
+    entry.busMarker.setLatLng([vehicle.lat, vehicle.lon]);
+    entry.busMarker.setPopupContent(
+        `Route 174 — ${distanceLabel}`
+    );
+
+    if (!entry.busVisible) {
+        entry.busMarker.addTo(entry.map);
+        entry.busVisible = true;
+    }
+
+    entry.map.fitBounds(
+        L.latLngBounds(
+            [vehicle.lat, vehicle.lon],
+            [stop.lat, stop.lon]
+        ),
+        { padding: [30, 30], maxZoom: 15 }
+    );
 
 }
 
-
-        });
-
-        // Remove buses no longer present
-        Object.keys(busMarkers).forEach(vehicleId => {
-
-            if (!activeVehicles.has(vehicleId)) {
-
-                map.removeLayer(busMarkers[vehicleId]);
-                delete busMarkers[vehicleId];
-
-                console.log("Removed marker:", vehicleId);
-
-            }
-
-        });
-
-    }
-    catch(err){
-
-        console.error(err);
-
-    }
-
-}
 
 // -------------------------------
 // Build Table
 // -------------------------------
 
-function populateTable(tableId,buses){
+function populateTable(tableId, buses, realtime){
 
-    const tbody=document.querySelector(
+    const tbody = document.querySelector(
         "#" + tableId + " tbody"
     );
 
-    tbody.innerHTML="";
+    tbody.innerHTML = "";
 
-    if(buses.length===0){
+    if(buses.length === 0){
 
-        tbody.innerHTML=
-        `<tr>
+        tbody.innerHTML = `
+        <tr>
             <td colspan="3">
                 No Route 174 services
             </td>
@@ -285,63 +298,90 @@ function populateTable(tableId,buses){
         return;
     }
 
+    buses.forEach(bus => {
 
-    buses.forEach(bus=>{
+        const row = document.createElement("tr");
 
-        const row=document.createElement("tr");
 
-        row.innerHTML=`
+        let arrival = formatTime(bus.arrival_time);
+        let minutes = bus.min;
+    
 
-            <td>${bus.route_id}</td>
+const trip = realtime.find(
+    t => String(t.tripId) === String(bus.trip_id)
+);
 
-            <td>${formatTime(bus.arrival_time)}</td>
+if (trip) {
 
-            <td>${badge(bus.min)}</td>
+    const scheduled =
+        Math.round(
+            new Date(bus.arrival_time).getTime() / 1000
+        );
 
-        `;
+    const delay =
+        Math.round(
+            (trip.arrival - scheduled) / 60
+        );
 
-        row.style.cursor = "pointer";
-
-row.onclick = () => {
-
-    selectedTripId = String(bus.trip_id);
-
-    document.getElementById("trackingBus").textContent =
-    "🚌 Finding selected bus...";
-
-document.getElementById("trackingSpeed").textContent =
-    "⚡ Speed: --";
-
-document.getElementById("trackingDirection").textContent =
-    "➡️ Direction: --";
-
-document.getElementById("trackingTime").textContent =
-    "🕒 Updated: " + new Date().toLocaleTimeString("en-AU");
-
-    console.log("Selected timetable trip:", selectedTripId);
-
-    document
-    .querySelectorAll("tbody tr")
-    .forEach(r => r.classList.remove("selected"));
-
-row.classList.add("selected");
-
-    Object.values(busMarkers).forEach(marker =>
-        map.removeLayer(marker)
+    const liveMinutes =
+    Math.max(
+        0,
+        Math.ceil(
+            (trip.arrival * 1000 - Date.now()) / 60000
+        )
     );
 
-    busMarkers = {};
+    minutes = liveMinutes;
 
-    loadVehicles().catch(console.error);
+    arrival = new Date(trip.arrival * 1000)
+        .toLocaleTimeString("en-AU", {
+            hour: "2-digit",
+            minute: "2-digit"
+        });
 
-};
+    if (Math.abs(delay) <= 1) {
 
-// Restore selection after refresh
-if (String(bus.trip_id) === selectedTripId) {
-    row.classList.add("selected");
+    arrival += " 🟢 On time";
+
+}
+else if (delay > 0 && delay <= 5) {
+
+    arrival += ` 🟠 ${delay} min late`;
+
+}
+else if (delay > 5) {
+
+    arrival += ` 🔴 ${delay} min late`;
+
+}
+else {
+
+    arrival += ` 🔵 ${Math.abs(delay)} min early`;
+
+}
 }
 
-tbody.appendChild(row);
+
+if (!trip) {
+
+    const scheduledTime = new Date(bus.arrival_time);
+
+    if (scheduledTime > new Date()) {
+        arrival += " 🟡 Scheduled";
+    } else {
+        arrival += " ⚪ Live unavailable";
+    }
+
+}
+
+
+        row.innerHTML = `
+    <td>${bus.route_id}</td>
+    <td>${arrival}</td>
+    <td>${badge(minutes)}</td>
+`;
+
+        tbody.appendChild(row);
 
     });
 
@@ -368,8 +408,6 @@ async function loadStop(stop){
 
         const services=json[2] || [];
 
-        console.log(services);
-
         return services
             .filter(x=>x.route_id==="174")
             .slice(0,10);
@@ -386,6 +424,15 @@ async function loadStop(stop){
 
 }
 
+async function loadRealtime(stop) {
+
+    const response = await fetch(
+        REALTIME_API + stop
+    );
+
+    return await response.json();
+
+}
 
 
 // -------------------------------
@@ -394,23 +441,43 @@ async function loadStop(stop){
 
 async function loadDashboard(){
 
-    const outbound=
-        await loadStop(OUTBOUND_STOP);
+    const outbound =
+    await loadStop(OUTBOUND_STOP);
 
-    const inbound=
-        await loadStop(INBOUND_STOP);
+const inbound =
+    await loadStop(INBOUND_STOP);
 
-    populateTable(
-        "outboundTable",
-        outbound
-    );
+const outboundRealtime =
+    await loadRealtime(OUTBOUND_STOP);
 
-    populateTable(
-        "inboundTable",
-        inbound
-    );
+const inboundRealtime =
+    await loadRealtime(INBOUND_STOP);
 
-    await loadVehicles();
+populateTable(
+    "outboundTable",
+    outbound,
+    outboundRealtime
+);
+
+populateTable(
+    "inboundTable",
+    inbound,
+    inboundRealtime
+);
+
+updateBusMap(
+    OUTBOUND_STOP,
+    "outboundDistance",
+    outbound[0],
+    outboundRealtime
+);
+
+updateBusMap(
+    INBOUND_STOP,
+    "inboundDistance",
+    inbound[0],
+    inboundRealtime
+);
 
     document.getElementById(
         "updated"
@@ -423,14 +490,15 @@ async function loadDashboard(){
 
 
 // -------------------------------
-// Refresh
+// Init maps, then start refreshing
 // -------------------------------
 
-initialiseMap();
+initMap(OUTBOUND_STOP, "outboundMap");
+initMap(INBOUND_STOP, "inboundMap");
 
 loadDashboard();
 
 setInterval(
     loadDashboard,
-    15000
+    10000
 );
