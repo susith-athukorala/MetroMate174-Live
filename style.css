@@ -19,6 +19,7 @@ body{
         sans-serif;
 
     background:#0f172a;
+
     color:#ffffff;
 
     min-height:100vh;
@@ -47,6 +48,7 @@ header{
 header h1{
 
     font-size:2.2rem;
+
     margin-bottom:8px;
 
 }
@@ -54,6 +56,7 @@ header h1{
 header p{
 
     color:#94a3b8;
+
     margin-bottom:18px;
 
 }
@@ -61,7 +64,9 @@ header p{
 #clock{
 
     font-size:2rem;
+
     font-weight:700;
+
     color:#38bdf8;
 
 }
@@ -69,10 +74,13 @@ header p{
 #updated{
 
     margin-top:8px;
+
     color:#94a3b8;
+
     font-size:0.9rem;
 
 }
+
 
 
 /* ===========================
@@ -81,7 +89,7 @@ header p{
 
 .container{
 
-    max-width:1300px;   /* slightly wider */
+    max-width:1200px;
 
     width:95%;
 
@@ -123,9 +131,11 @@ header p{
 
 }
 
+
 .card h2{
 
     margin-bottom:10px;
+
     font-size:1.4rem;
 
 }
@@ -141,85 +151,14 @@ header p{
 }
 
 
-/* ======================================================
-                 NEW MAP STYLES
-====================================================== */
-
-#map{
-
-    width:100%;
-    height:380px;
-
-    border-radius:16px;
-
-    overflow:hidden;
-
-    border:2px solid #334155;
-
-    margin-top:15px;
-    margin-bottom:18px;
-
-}
-
-#liveBusInfo{
-
-    display:grid;
-
-    grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
-
-    gap:12px;
-
-    margin-top:10px;
-
-}
-
-.infoBox{
-
-    background:#0f172a;
-
-    border:1px solid #334155;
-
-    border-radius:12px;
-
-    padding:14px;
-
-}
-
-.infoTitle{
-
-    font-size:.8rem;
-
-    color:#94a3b8;
-
-    margin-bottom:6px;
-
-}
-
-.infoValue{
-
-    font-size:1.05rem;
-
-    font-weight:700;
-
-    color:#ffffff;
-
-}
-
-.bus-icon{
-    font-size:28px;
-    text-align:center;
-    line-height:30px;
-}
-
-
-
-/* ======================================================
-                 TABLE
-====================================================== */
+/* ===========================
+          TABLE
+=========================== */
 
 table{
 
     width:100%;
+
     border-collapse:collapse;
 
 }
@@ -232,7 +171,7 @@ th{
 
     text-align:left;
 
-    font-size:.95rem;
+    font-size:0.95rem;
 
 }
 
@@ -250,14 +189,10 @@ tbody tr:hover{
 
 }
 
-tbody tr.selected{
-    background:#2563eb;
-    color:white;
-}
 
-/* ======================================================
-          COUNTDOWN BADGES
-====================================================== */
+/* ===========================
+       COUNTDOWN BADGES
+=========================== */
 
 .badge{
 
@@ -278,6 +213,7 @@ tbody tr.selected{
 .green{
 
     background:#16a34a;
+
     color:white;
 
 }
@@ -285,6 +221,7 @@ tbody tr.selected{
 .orange{
 
     background:#f59e0b;
+
     color:black;
 
 }
@@ -292,6 +229,7 @@ tbody tr.selected{
 .red{
 
     background:#dc2626;
+
     color:white;
 
 }
@@ -299,33 +237,67 @@ tbody tr.selected{
 .grey{
 
     background:#475569;
+
     color:white;
 
 }
 
 
-/* ======================================================
-          LEAFLET POPUPS
-====================================================== */
+/* ===========================
+       MINI MAP
+=========================== */
 
-.leaflet-popup-content{
+.mini-map{
 
-    font-size:14px;
+    height:220px;
+
+    width:100%;
+
+    border-radius:14px;
+
+    margin-top:20px;
+
+    overflow:hidden;
+
+    background:#0f172a;
+
+    z-index:0;
 
 }
 
-.leaflet-container{
+.distance-text{
 
-    background:#dfe8f5;
+    margin-top:10px;
 
-    border-radius:16px;
+    color:#94a3b8;
+
+    font-size:0.9rem;
+
+    text-align:center;
+
+}
+
+.distance-text.live{
+
+    color:#38bdf8;
+
+    font-weight:600;
+
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip{
+
+    background:#1e293b;
+
+    color:#ffffff;
 
 }
 
 
-/* ======================================================
-            FOOTER
-====================================================== */
+/* ===========================
+        FOOTER
+=========================== */
 
 footer{
 
@@ -342,9 +314,9 @@ footer{
 }
 
 
-/* ======================================================
-           RESPONSIVE
-====================================================== */
+/* ===========================
+      RESPONSIVE
+=========================== */
 
 @media(max-width:900px){
 
@@ -353,12 +325,6 @@ footer{
         grid-template-columns:1fr;
 
         width:96%;
-
-    }
-
-    #map{
-
-        height:320px;
 
     }
 
@@ -389,18 +355,6 @@ footer{
 
         padding:10px;
         font-size:.9rem;
-
-    }
-
-    #map{
-
-        height:260px;
-
-    }
-
-    #liveBusInfo{
-
-        grid-template-columns:1fr;
 
     }
 
