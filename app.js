@@ -58,17 +58,29 @@ function resolveFocusBus(stopKey, buses, realtime){
     const state = tracked[stopKey];
     const stop = STOPS[stopKey];
 
+    const trips = (realtime && realtime.trips) || [];
+    const vehicles = (realtime && realtime.vehicles) || {};
+
+    // The stop-filtered `trips` entry can vanish from Adelaide Metro's
+    // own feed the moment it decides a vehicle has passed the stop —
+    // that happens regardless of GRACE_SECONDS on the worker side.
+    // `vehicles` has no such filter, so as long as the tracked bus is
+    // still broadcasting GPS at all, we keep following it from there
+    // and only let go once it's actually within arrival distance (or
+    // it stops broadcasting for a while).
     let trip = state.tripId &&
-        realtime.find(t => String(t.tripId) === String(state.tripId));
+        trips.find(t => String(t.tripId) === String(state.tripId));
 
-    if (trip) {
+    let vehicle = state.tripId ? vehicles[state.tripId] : null;
 
-        state.missed = 0;
+    if (state.tripId) {
 
-        if (trip.vehicle) {
+        if (vehicle) {
+
+            state.missed = 0;
 
             const km = distanceKm(
-                trip.vehicle.lat, trip.vehicle.lon,
+                vehicle.lat, vehicle.lon,
                 stop.lat, stop.lon
             );
 
@@ -79,23 +91,25 @@ function resolveFocusBus(stopKey, buses, realtime){
                 state.tripId = null;
                 state.snapshot = null;
                 trip = null;
+                vehicle = null;
 
             }
 
-        }
+        } else {
 
-    } else if (state.tripId) {
+            // No live GPS at all for this trip this cycle — could be
+            // a brief gap in the feed, could mean the vehicle has
+            // gone off-shift entirely. Give it a few cycles before
+            // giving up on it.
+            state.missed++;
 
-        // Missing from this cycle — could be a brief gap in the
-        // feed, could mean the trip has genuinely ended. Give it a
-        // few cycles before giving up on it.
-        state.missed++;
+            if (state.missed > MAX_MISSED_CYCLES) {
 
-        if (state.missed > MAX_MISSED_CYCLES) {
+                state.tripId = null;
+                state.snapshot = null;
+                state.missed = 0;
 
-            state.tripId = null;
-            state.snapshot = null;
-            state.missed = 0;
+            }
 
         }
 
@@ -107,7 +121,21 @@ function resolveFocusBus(stopKey, buses, realtime){
             b => String(b.trip_id) === String(state.tripId)
         ) || state.snapshot;
 
-        return { bus, trip: trip || null };
+        // The stop-filtered `trip` may be gone even though the bus is
+        // still tracked (see above) — if so, fall back to a synthetic
+        // trip built from the live vehicle GPS alone, so the map and
+        // status line keep showing it as en route rather than
+        // disappearing.
+        const effectiveTrip = trip || (vehicle ? {
+            tripId: state.tripId,
+            vehicle,
+            stopsAway: null,
+            arrival: state.snapshot
+                ? Math.round(new Date(state.snapshot.arrival_time).getTime() / 1000)
+                : null
+        } : null);
+
+        return { bus, trip: effectiveTrip };
 
     }
 
@@ -120,7 +148,7 @@ function resolveFocusBus(stopKey, buses, realtime){
     state.snapshot = candidate;
     state.missed = 0;
 
-    const candidateTrip = realtime.find(
+    const candidateTrip = trips.find(
         t => String(t.tripId) === String(candidate.trip_id)
     );
 
@@ -456,7 +484,7 @@ function populateTable(tableId, buses, realtime){
         let minutes = bus.min;
     
 
-const trip = realtime.find(
+const trip = (realtime.trips || []).find(
     t => String(t.tripId) === String(bus.trip_id)
 );
 
