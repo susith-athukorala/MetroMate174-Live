@@ -826,9 +826,20 @@ if (!trip) {
             Math.ceil(((focus.dueMs || Date.now()) - Date.now()) / 60000)
         );
 
-        arrival += focus.stale
-            ? " ⚪ GPS paused"
-            : " 🚌 Tracking by GPS";
+        if (focus.vehicle) {
+
+            arrival += focus.stale
+                ? " ⚪ GPS paused"
+                : " 🚌 Tracking by GPS";
+
+        } else {
+
+            // No GPS at all for this bus: don't claim we are tracking it.
+            arrival += (focus.dueMs || 0) > Date.now()
+                ? " 🟡 Scheduled"
+                : " ⚪ Live unavailable";
+
+        }
 
     } else {
 
