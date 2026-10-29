@@ -34,24 +34,235 @@ const STOPS = {
 
 
 // -------------------------------
-// Bus tracking
+// Bus tracking (v4)
 //
 // The Adelaide Metro "next scheduled services" list drops a bus the
-// instant its scheduled time passes, even if the real bus is still a
-// minute or two from the stop. To keep it visible until it actually
-// gets there, once we lock onto a trip_id we keep following that same
-// bus (via the worker's realtime feed) rather than jumping to
-// whatever the schedule API now calls "next" — and only let go of it
-// once its live GPS is close enough to the stop to count as arrived.
+// instant its scheduled time passes, and the realtime feed can drop
+// its stop entry when the predicted time passes, even if a delayed
+// bus is still several minutes away. So the app picks one bus (a
+// trip_id), follows its live GPS, and only lets go of it once it has
+// actually reached the stop and moved on.
+//
+//  - The tracked bus is saved in localStorage, so a page refresh (or
+//    the phone killing the tab) does not lose it.
+//  - A fresh page can adopt a bus that the schedule list has already
+//    dropped, as long as the realtime feed still lists it.
+//  - If GPS goes quiet, the last known position stays on the map
+//    (faded, "last seen X min ago") instead of disappearing.
 // -------------------------------
 
-const ARRIVED_DISTANCE_KM = 0.12; // ~120m — close enough to call it arrived
-const MAX_MISSED_CYCLES = 6;      // ~1 min of gaps in the feed before giving up
+const STORAGE_KEY = "metromate174.tracking.v4";
+
+const APPROACH_KM = 0.15;            // within ~150 m: at / arriving at the stop
+const PASSED_MARGIN_KM = 0.15;       // this far beyond its closest point = it has gone past
+const FAR_PASS_KM = 0.6;             // GPS can skip the stop zone, so also check coarsely...
+const FAR_PASS_MARGIN_KM = 0.35;     // ...came this close, then moved this much further, heading away
+const WAKE_PASS_MARGIN_KM = 1.0;     // heading away and this much further than closest point (e.g. phone slept)
+const GPS_STALE_MS = 30 * 1000;      // no fresh GPS for this long: show as "last seen"
+const GPS_LOST_LIMIT_MS = 6 * 60 * 1000;      // no GPS for this long: give up on the bus
+const NO_GPS_AFTER_DUE_MS = 8 * 60 * 1000;    // never had GPS and now well past due: give up
+const MAX_TRACK_AFTER_DUE_MS = 25 * 60 * 1000; // absolute cap past the due time
+const RESTORE_MAX_AGE_MS = 25 * 60 * 1000;    // ignore saved tracking older than this
+const WATCH_GAP_MS = 60 * 1000;      // we had no look at the bus for this long (phone asleep, feed gap)
+const COLD_START_NO_GPS_S = 5 * 60;  // new page, no GPS: only adopt if due within the last 5 min
+
+function blankState(){
+    return {
+        tripId: null,
+        snapshot: null,
+        lockedAt: null,
+        dueMs: null,
+        minKm: null,
+        lastVehicle: null,
+        lastSeen: null,
+        lastTouched: null,
+        doneTrips: []
+    };
+}
 
 const tracked = {
-    [OUTBOUND_STOP]: { tripId: null, snapshot: null, missed: 0 },
-    [INBOUND_STOP]: { tripId: null, snapshot: null, missed: 0 }
+    [OUTBOUND_STOP]: blankState(),
+    [INBOUND_STOP]: blankState()
 };
+
+function saveTracking(){
+    try {
+        localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({ savedAt: Date.now(), tracked })
+        );
+    } catch (e) { /* storage unavailable — tracking still works in memory */ }
+}
+
+function restoreTracking(){
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+
+        const saved = JSON.parse(raw);
+        if (!saved || !saved.tracked) return;
+
+        for (const key of Object.keys(tracked)) {
+
+            const s = saved.tracked[key];
+            if (!s) continue;
+
+            const restored = Object.assign(blankState(), s);
+
+            const age = Date.now() - (s.lastTouched || saved.savedAt || 0);
+
+            if (age > RESTORE_MAX_AGE_MS) {
+                // Too old to trust the bus, but keep the "already
+                // handled" list so we don't re-adopt a gone trip.
+                restored.tripId = null;
+                restored.snapshot = null;
+            }
+
+            tracked[key] = restored;
+        }
+    } catch (e) { /* corrupt or unavailable storage — start fresh */ }
+}
+
+function releaseBus(stopKey){
+
+    const state = tracked[stopKey];
+
+    const done = state.doneTrips || [];
+
+    if (state.tripId) done.unshift(String(state.tripId));
+
+    // Reset in place: callers hold a reference to this same object.
+    Object.assign(
+        state,
+        blankState(),
+        { doneTrips: done.slice(0, 12) }
+    );
+
+}
+
+function isDone(stopKey, tripId){
+    return (tracked[stopKey].doneTrips || []).includes(String(tripId));
+}
+
+function bearingBetween(lat1, lon1, lat2, lon2){
+
+    const rad = d => d * Math.PI / 180;
+
+    const y = Math.sin(rad(lon2 - lon1)) * Math.cos(rad(lat2));
+    const x =
+        Math.cos(rad(lat1)) * Math.sin(rad(lat2)) -
+        Math.sin(rad(lat1)) * Math.cos(rad(lat2)) * Math.cos(rad(lon2 - lon1));
+
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+
+}
+
+function angleDiff(a, b){
+
+    const d = Math.abs(a - b) % 360;
+
+    return d > 180 ? 360 - d : d;
+
+}
+
+// True when the bus is heading away from the stop (more than 100 degrees
+// off a straight line towards it).
+function movingAway(vehicle, stop){
+
+    if (vehicle.bearing === null || vehicle.bearing === undefined) return false;
+
+    const toStop = bearingBetween(
+        vehicle.lat, vehicle.lon, stop.lat, stop.lon
+    );
+
+    return angleDiff(vehicle.bearing, toStop) > 100;
+
+}
+
+// Quick single-sample guess used only when a fresh page has no history:
+// is this vehicle clearly beyond the stop already?
+function looksPassed(vehicle, stop){
+
+    if (!vehicle) return false;
+
+    const km = distanceKm(vehicle.lat, vehicle.lon, stop.lat, stop.lon);
+
+    if (km <= APPROACH_KM) return false;
+
+    return km < 3 && movingAway(vehicle, stop);
+
+}
+
+// Has the tracked bus reached the stop and gone on past it?
+function hasPassed(state, vehicle, stop, km){
+
+    const min = state.minKm;
+
+    if (min === null) return false;
+
+    // Reached the stop area, then moved clearly away from its closest point.
+    if (min <= APPROACH_KM && km >= min + PASSED_MARGIN_KM) return true;
+
+    // GPS fixes can skip the stop zone, so also catch "came close, then
+    // clearly heading away".
+    if (min <= FAR_PASS_KM && km >= min + FAR_PASS_MARGIN_KM &&
+        movingAway(vehicle, stop)) return true;
+
+    // Long gap (e.g. phone asleep): well beyond its closest point and heading away.
+    if (km >= min + WAKE_PASS_MARGIN_KM && movingAway(vehicle, stop)) return true;
+
+    return false;
+
+}
+
+function pickCandidate(stopKey, buses, trips){
+
+    const stop = STOPS[stopKey];
+    const nowS = Date.now() / 1000;
+
+    const fromRealtime = trips.find(t =>
+        !isDone(stopKey, t.tripId) &&
+        (t.vehicle
+            ? !looksPassed(t.vehicle, stop)
+            : t.arrival >= nowS - COLD_START_NO_GPS_S)
+    );
+
+    const fromSchedule = buses.find(b => !isDone(stopKey, b.trip_id));
+
+    if (!fromRealtime && !fromSchedule) return null;
+
+    const rtMs = fromRealtime ? fromRealtime.arrival * 1000 : Infinity;
+
+    let schMs = fromSchedule
+        ? new Date(fromSchedule.arrival_time).getTime()
+        : Infinity;
+
+    if (!Number.isFinite(schMs)) schMs = Infinity;
+
+    if (fromRealtime && rtMs <= schMs) {
+
+        const bus = buses.find(
+            b => String(b.trip_id) === String(fromRealtime.tripId)
+        ) || {
+            trip_id: fromRealtime.tripId,
+            route_id: fromRealtime.route || "174",
+            arrival_time: new Date(rtMs).toISOString(),
+            min: Math.max(0, Math.ceil((rtMs - Date.now()) / 60000)),
+            synthetic: true // schedule no longer lists it, so no timetable time to compare with
+        };
+
+        return { bus, trip: fromRealtime };
+
+    }
+
+    return {
+        bus: fromSchedule,
+        trip: trips.find(
+            t => String(t.tripId) === String(fromSchedule.trip_id)
+        ) || null
+    };
+
+}
 
 function resolveFocusBus(stopKey, buses, realtime){
 
@@ -61,98 +272,126 @@ function resolveFocusBus(stopKey, buses, realtime){
     const trips = (realtime && realtime.trips) || [];
     const vehicles = (realtime && realtime.vehicles) || {};
 
-    // The stop-filtered `trips` entry can vanish from Adelaide Metro's
-    // own feed the moment it decides a vehicle has passed the stop —
-    // that happens regardless of GRACE_SECONDS on the worker side.
-    // `vehicles` has no such filter, so as long as the tracked bus is
-    // still broadcasting GPS at all, we keep following it from there
-    // and only let go once it's actually within arrival distance (or
-    // it stops broadcasting for a while).
-    let trip = state.tripId &&
-        trips.find(t => String(t.tripId) === String(state.tripId));
-
-    let vehicle = state.tripId ? vehicles[state.tripId] : null;
+    const nowMs = Date.now();
 
     if (state.tripId) {
 
+        const trip = trips.find(
+            t => String(t.tripId) === String(state.tripId)
+        );
+
+        const vehicle = vehicles[state.tripId] || null;
+
+        if (trip) {
+            state.dueMs = Math.max(state.dueMs || 0, trip.arrival * 1000);
+        }
+
+        let release = false;
+
         if (vehicle) {
 
-            state.missed = 0;
+            // How long since we last saw this bus on GPS (before this cycle).
+            const unwatchedMs = state.lastSeen ? nowMs - state.lastSeen : 0;
+
+            state.lastVehicle = vehicle;
+            state.lastSeen = nowMs;
 
             const km = distanceKm(
-                vehicle.lat, vehicle.lon,
-                stop.lat, stop.lon
+                vehicle.lat, vehicle.lon, stop.lat, stop.lon
             );
 
-            if (km <= ARRIVED_DISTANCE_KM) {
+            state.minKm = state.minKm === null
+                ? km
+                : Math.min(state.minKm, km);
 
-                // It made it to the stop — stop tracking it, the
-                // next cycle will pick up whichever bus is next.
-                state.tripId = null;
-                state.snapshot = null;
-                trip = null;
-                vehicle = null;
+            if (hasPassed(state, vehicle, stop, km)) release = true;
 
+            // If we lost sight of it for a while, it may have gone through
+            // the stop zone unseen. Back in view and clearly heading away
+            // from the stop = it has passed.
+            if (unwatchedMs > WATCH_GAP_MS && looksPassed(vehicle, stop)) {
+                release = true;
             }
 
-        } else {
+        } else if (state.lastSeen) {
 
-            // No live GPS at all for this trip this cycle — could be
-            // a brief gap in the feed, could mean the vehicle has
-            // gone off-shift entirely. Give it a few cycles before
-            // giving up on it.
-            state.missed++;
+            if (nowMs - state.lastSeen > GPS_LOST_LIMIT_MS) release = true;
 
-            if (state.missed > MAX_MISSED_CYCLES) {
+        } else if (nowMs > (state.dueMs || 0) + NO_GPS_AFTER_DUE_MS) {
 
-                state.tripId = null;
-                state.snapshot = null;
-                state.missed = 0;
+            // We never saw this bus on GPS and it is well past due.
+            release = true;
 
-            }
+        }
 
+        if (nowMs > (state.dueMs || 0) + MAX_TRACK_AFTER_DUE_MS) release = true;
+
+        if (release) releaseBus(stopKey);
+
+    }
+
+    if (!state.tripId) {
+
+        const pick = pickCandidate(stopKey, buses, trips);
+
+        if (!pick) {
+            saveTracking();
+            return {
+                bus: null, trip: null, vehicle: null,
+                stale: false, lastSeen: null, dueMs: null
+            };
+        }
+
+        const candidateMs = new Date(pick.bus.arrival_time).getTime();
+
+        state.tripId = pick.bus.trip_id;
+        state.snapshot = pick.bus;
+        state.lockedAt = nowMs;
+        state.minKm = null;
+        state.lastVehicle = null;
+        state.lastSeen = null;
+        state.dueMs = Math.max(
+            Number.isFinite(candidateMs) ? candidateMs : 0,
+            pick.trip ? pick.trip.arrival * 1000 : 0
+        );
+
+        const live = vehicles[state.tripId] || (pick.trip && pick.trip.vehicle);
+
+        if (live) {
+            state.lastVehicle = live;
+            state.lastSeen = nowMs;
+            state.minKm = distanceKm(live.lat, live.lon, stop.lat, stop.lon);
         }
 
     }
 
-    if (state.tripId) {
+    state.lastTouched = nowMs;
 
-        const bus = buses.find(
-            b => String(b.trip_id) === String(state.tripId)
-        ) || state.snapshot;
+    const bus = buses.find(
+        b => String(b.trip_id) === String(state.tripId)
+    ) || state.snapshot;
 
-        // The stop-filtered `trip` may be gone even though the bus is
-        // still tracked (see above) — if so, fall back to a synthetic
-        // trip built from the live vehicle GPS alone, so the map and
-        // status line keep showing it as en route rather than
-        // disappearing.
-        const effectiveTrip = trip || (vehicle ? {
-            tripId: state.tripId,
-            vehicle,
-            stopsAway: null,
-            arrival: state.snapshot
-                ? Math.round(new Date(state.snapshot.arrival_time).getTime() / 1000)
-                : null
-        } : null);
+    const trip = trips.find(
+        t => String(t.tripId) === String(state.tripId)
+    ) || null;
 
-        return { bus, trip: effectiveTrip };
+    const liveVehicle = vehicles[state.tripId] || null;
 
-    }
+    const vehicle = liveVehicle || state.lastVehicle;
 
-    // Nothing tracked yet — adopt the next scheduled bus.
-    const candidate = buses[0];
+    const stale = !liveVehicle && !!vehicle &&
+        (nowMs - (state.lastSeen || 0) > GPS_STALE_MS);
 
-    if (!candidate) return { bus: null, trip: null };
+    saveTracking();
 
-    state.tripId = candidate.trip_id;
-    state.snapshot = candidate;
-    state.missed = 0;
-
-    const candidateTrip = trips.find(
-        t => String(t.tripId) === String(candidate.trip_id)
-    );
-
-    return { bus: candidate, trip: candidateTrip || null };
+    return {
+        bus,
+        trip,
+        vehicle,
+        stale,
+        lastSeen: state.lastSeen,
+        dueMs: state.dueMs
+    };
 
 }
 
@@ -167,6 +406,8 @@ function mergeFocusIntoList(focusBus, buses){
     return alreadyThere ? buses : [focusBus, ...buses];
 
 }
+
+restoreTracking();
 
 
 // -------------------------------
@@ -389,7 +630,7 @@ function updateBusMap(stopKey, distanceElementId, focus){
 
     const topBus = focus && focus.bus;
     const trip = focus && focus.trip;
-    const vehicle = trip && trip.vehicle;
+    const vehicle = focus && focus.vehicle;
 
     if (!topBus) {
 
@@ -420,20 +661,46 @@ function updateBusMap(stopKey, distanceElementId, focus){
         return;
     }
 
-    const stopsAway = typeof trip.stopsAway === "number" ? trip.stopsAway : null;
+    const stopsAway =
+        trip && typeof trip.stopsAway === "number" ? trip.stopsAway : null;
 
-    const statusText =
-        stopsAway !== null
-            ? `🚌 ${stopsAwayLabel(stopsAway)} — ${vehicleStatusLabel(vehicle)}`
-            : `🚌 ${vehicleStatusLabel(vehicle)} (live GPS)`;
+    const km = distanceKm(vehicle.lat, vehicle.lon, stop.lat, stop.lon);
+
+    let statusText;
+    let popupText;
+
+    if (focus.stale) {
+
+        const minsAgo = Math.round((Date.now() - focus.lastSeen) / 60000);
+
+        const when = minsAgo < 1 ? "under a minute ago" : `${minsAgo} min ago`;
+
+        statusText = `🚌 GPS paused — last seen ${when}`;
+        popupText = `Route 174 — last known position, seen ${when}`;
+
+    } else if (km <= APPROACH_KM) {
+
+        statusText = "🚌 At your stop";
+        popupText = "Route 174 — at your stop";
+
+    } else if (stopsAway !== null) {
+
+        statusText = `🚌 ${stopsAwayLabel(stopsAway)} — ${vehicleStatusLabel(vehicle)}`;
+        popupText = `Route 174 — ${stopsAwayLabel(stopsAway)}, ${vehicleStatusLabel(vehicle)}`;
+
+    } else {
+
+        statusText = `🚌 On the way — ${vehicleStatusLabel(vehicle)}`;
+        popupText = `Route 174 — on the way, ${vehicleStatusLabel(vehicle)}`;
+
+    }
 
     distanceEl.textContent = statusText;
-    distanceEl.classList.add("live");
+    distanceEl.classList.toggle("live", !focus.stale);
 
     entry.busMarker.setLatLng([vehicle.lat, vehicle.lon]);
-    entry.busMarker.setPopupContent(
-        `Route 174 — ${stopsAway !== null ? stopsAwayLabel(stopsAway) : "en route"}, ${vehicleStatusLabel(vehicle)}`
-    );
+    entry.busMarker.setOpacity(focus.stale ? 0.5 : 1);
+    entry.busMarker.setPopupContent(popupText);
 
     if (!entry.busVisible) {
         entry.busMarker.addTo(entry.map);
@@ -455,7 +722,7 @@ function updateBusMap(stopKey, distanceElementId, focus){
 // Build Table
 // -------------------------------
 
-function populateTable(tableId, buses, realtime){
+function populateTable(tableId, buses, realtime, focus){
 
     const tbody = document.querySelector(
         "#" + tableId + " tbody"
@@ -516,7 +783,12 @@ if (trip) {
             minute: "2-digit"
         });
 
-    if (Math.abs(delay) <= 1) {
+    if (bus.synthetic) {
+
+    arrival += " 🚌 Live";
+
+}
+else if (Math.abs(delay) <= 1) {
 
     arrival += " 🟢 On time";
 
@@ -541,12 +813,33 @@ else {
 
 if (!trip) {
 
-    const scheduledTime = new Date(bus.arrival_time);
+    const isFocus =
+        focus && focus.bus &&
+        String(bus.trip_id) === String(focus.bus.trip_id);
 
-    if (scheduledTime > new Date()) {
-        arrival += " 🟡 Scheduled";
+    if (isFocus) {
+
+        // Tracked bus that the feeds have stopped listing: keep it on
+        // the board, show it as due, and say it is followed by GPS.
+        minutes = Math.max(
+            0,
+            Math.ceil(((focus.dueMs || Date.now()) - Date.now()) / 60000)
+        );
+
+        arrival += focus.stale
+            ? " ⚪ GPS paused"
+            : " 🚌 Tracking by GPS";
+
     } else {
-        arrival += " ⚪ Live unavailable";
+
+        const scheduledTime = new Date(bus.arrival_time);
+
+        if (scheduledTime > new Date()) {
+            arrival += " 🟡 Scheduled";
+        } else {
+            arrival += " ⚪ Live unavailable";
+        }
+
     }
 
 }
@@ -603,11 +896,31 @@ async function loadStop(stop){
 
 async function loadRealtime(stop) {
 
-    const response = await fetch(
-        REALTIME_API + stop
-    );
+    try {
 
-    return await response.json();
+        const response = await fetch(
+            REALTIME_API + stop
+        );
+
+        const json = await response.json();
+
+        // Older worker versions returned a bare array of trips.
+        if (Array.isArray(json)) return { trips: json, vehicles: {} };
+
+        return {
+            trips: json.trips || [],
+            vehicles: json.vehicles || {}
+        };
+
+    }
+
+    catch(e){
+
+        console.error(e);
+
+        return { trips: [], vehicles: {} };
+
+    }
 
 }
 
@@ -618,47 +931,43 @@ async function loadRealtime(stop) {
 
 async function loadDashboard(){
 
+    const outboundAll = await loadStop(OUTBOUND_STOP);
+    const inboundAll = await loadStop(INBOUND_STOP);
+
+    const outboundRealtime = await loadRealtime(OUTBOUND_STOP);
+    const inboundRealtime = await loadRealtime(INBOUND_STOP);
+
+    const outboundFocus =
+        resolveFocusBus(OUTBOUND_STOP, outboundAll, outboundRealtime);
+
+    const inboundFocus =
+        resolveFocusBus(INBOUND_STOP, inboundAll, inboundRealtime);
+
+    // A bus we have already seen reach and pass the stop should not
+    // linger in the list just because its scheduled time is still ahead
+    // (an early bus).
     const outbound =
-    await loadStop(OUTBOUND_STOP);
+        outboundAll.filter(b => !isDone(OUTBOUND_STOP, b.trip_id));
 
-const inbound =
-    await loadStop(INBOUND_STOP);
+    const inbound =
+        inboundAll.filter(b => !isDone(INBOUND_STOP, b.trip_id));
 
-const outboundRealtime =
-    await loadRealtime(OUTBOUND_STOP);
+    populateTable(
+        "outboundTable",
+        mergeFocusIntoList(outboundFocus.bus, outbound),
+        outboundRealtime,
+        outboundFocus
+    );
 
-const inboundRealtime =
-    await loadRealtime(INBOUND_STOP);
+    populateTable(
+        "inboundTable",
+        mergeFocusIntoList(inboundFocus.bus, inbound),
+        inboundRealtime,
+        inboundFocus
+    );
 
-const outboundFocus =
-    resolveFocusBus(OUTBOUND_STOP, outbound, outboundRealtime);
-
-const inboundFocus =
-    resolveFocusBus(INBOUND_STOP, inbound, inboundRealtime);
-
-populateTable(
-    "outboundTable",
-    mergeFocusIntoList(outboundFocus.bus, outbound),
-    outboundRealtime
-);
-
-populateTable(
-    "inboundTable",
-    mergeFocusIntoList(inboundFocus.bus, inbound),
-    inboundRealtime
-);
-
-updateBusMap(
-    OUTBOUND_STOP,
-    "outboundDistance",
-    outboundFocus
-);
-
-updateBusMap(
-    INBOUND_STOP,
-    "inboundDistance",
-    inboundFocus
-);
+    updateBusMap(OUTBOUND_STOP, "outboundDistance", outboundFocus);
+    updateBusMap(INBOUND_STOP, "inboundDistance", inboundFocus);
 
     document.getElementById(
         "updated"
