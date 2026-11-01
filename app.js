@@ -20,12 +20,14 @@ const STOPS = {
 
     [OUTBOUND_STOP]: {
         name: "Stop 21 Lower North East Rd",
+        dest: "City",
         lat: -34.880273,
         lon: 138.662438
     },
 
     [INBOUND_STOP]: {
         name: "Stop I1 North Tce",
+        dest: "Home",
         lat: -34.920937,
         lon: 138.608466
     }
@@ -65,6 +67,7 @@ const MAX_TRACK_AFTER_DUE_MS = 25 * 60 * 1000; // absolute cap past the due time
 const RESTORE_MAX_AGE_MS = 25 * 60 * 1000;    // ignore saved tracking older than this
 const WATCH_GAP_MS = 60 * 1000;      // we had no look at the bus for this long (phone asleep, feed gap)
 const COLD_START_NO_GPS_S = 5 * 60;  // new page, no GPS: only adopt if due within the last 5 min
+const DONE_TTL_MS = 90 * 60 * 1000;  // remember a finished trip this long (trip IDs repeat on later days)
 
 function blankState(){
     return {
@@ -72,6 +75,7 @@ function blankState(){
         snapshot: null,
         lockedAt: null,
         dueMs: null,
+        predMs: null,   // last live predicted arrival (null = never had one)
         minKm: null,
         lastVehicle: null,
         lastSeen: null,
@@ -127,9 +131,13 @@ function releaseBus(stopKey){
 
     const state = tracked[stopKey];
 
-    const done = state.doneTrips || [];
+    const done = (state.doneTrips || []).filter(
+        d => d && d.id && Date.now() - d.at < DONE_TTL_MS
+    );
 
-    if (state.tripId) done.unshift(String(state.tripId));
+    if (state.tripId) {
+        done.unshift({ id: String(state.tripId), at: Date.now() });
+    }
 
     // Reset in place: callers hold a reference to this same object.
     Object.assign(
@@ -141,7 +149,10 @@ function releaseBus(stopKey){
 }
 
 function isDone(stopKey, tripId){
-    return (tracked[stopKey].doneTrips || []).includes(String(tripId));
+    return (tracked[stopKey].doneTrips || []).some(
+        d => d && String(d.id) === String(tripId) &&
+             Date.now() - d.at < DONE_TTL_MS
+    );
 }
 
 function bearingBetween(lat1, lon1, lat2, lon2){
@@ -284,6 +295,7 @@ function resolveFocusBus(stopKey, buses, realtime){
 
         if (trip) {
             state.dueMs = Math.max(state.dueMs || 0, trip.arrival * 1000);
+            state.predMs = trip.arrival * 1000;
         }
 
         let release = false;
@@ -350,6 +362,7 @@ function resolveFocusBus(stopKey, buses, realtime){
         state.minKm = null;
         state.lastVehicle = null;
         state.lastSeen = null;
+        state.predMs = pick.trip ? pick.trip.arrival * 1000 : null;
         state.dueMs = Math.max(
             Number.isFinite(candidateMs) ? candidateMs : 0,
             pick.trip ? pick.trip.arrival * 1000 : 0
@@ -390,7 +403,8 @@ function resolveFocusBus(stopKey, buses, realtime){
         vehicle,
         stale,
         lastSeen: state.lastSeen,
-        dueMs: state.dueMs
+        dueMs: state.dueMs,
+        predictedMs: state.predMs
     };
 
 }
@@ -408,6 +422,9 @@ function mergeFocusIntoList(focusBus, buses){
 }
 
 restoreTracking();
+
+const restoredFromStorage =
+    Object.values(tracked).some(s => s.tripId);
 
 
 // -------------------------------
@@ -590,6 +607,110 @@ const stopIcon = L.divIcon({
 
 const maps = {};
 
+
+// Bus marker with a small coloured badge: green on time, orange a few
+// minutes late, red well late, blue early, grey when unknown or GPS paused.
+function buildBusIcon(colour){
+
+    return L.divIcon({
+        className: "",
+        html:
+            '<div style="position:relative;width:28px;height:28px;' +
+            'font-size:20px;line-height:28px;text-align:center">🚌' +
+            '<span style="position:absolute;right:-2px;top:-3px;' +
+            'width:10px;height:10px;border-radius:50%;' +
+            'border:2px solid #fff;background:' + colour + '"></span></div>',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+    });
+
+}
+
+// Minutes late (+) or early (-) against the timetable, or null when we
+// have no live prediction or no timetable time to compare with.
+function delayMinutes(focus){
+
+    const bus = focus.bus;
+
+    if (!bus || bus.synthetic || !focus.predictedMs) return null;
+
+    const scheduledMs = new Date(bus.arrival_time).getTime();
+
+    if (!Number.isFinite(scheduledMs)) return null;
+
+    return Math.round((focus.predictedMs - scheduledMs) / 60000);
+
+}
+
+function badgeColour(delay, stale){
+
+    if (stale || delay === null) return "#8b95a5";
+    if (delay > 5) return "#e5484d";
+    if (delay > 1) return "#f5a524";
+    if (delay < -1) return "#3b82f6";
+
+    return "#30a46c";
+
+}
+
+function delayText(delay){
+
+    if (delay === null) return "Live position";
+    if (delay > 1) return `Delayed ${delay} min`;
+    if (delay < -1) return `${Math.abs(delay)} min early`;
+
+    return "On time";
+
+}
+
+function agoText(ms){
+
+    const secs = Math.max(0, Math.round((Date.now() - ms) / 1000));
+
+    if (secs < 15) return "just now";
+    if (secs < 90) return `${secs} s ago`;
+
+    return `${Math.round(secs / 60)} min ago`;
+
+}
+
+function busLabelHtml(stopKey, focus, delay){
+
+    const stop = STOPS[stopKey];
+
+    const parts2 = [];
+
+    if (focus.predictedMs) {
+        parts2.push(
+            "due " + new Date(focus.predictedMs).toLocaleTimeString(
+                "en-AU", { hour: "numeric", minute: "2-digit" }
+            )
+        );
+    }
+
+    parts2.push(
+        focus.stale
+            ? `last seen ${agoText(focus.lastSeen)}`
+            : `updated ${agoText(focus.lastSeen)}`
+    );
+
+    return `174 → ${stop.dest} · ${delayText(delay)}<br>${parts2.join(" · ")}`;
+
+}
+
+// Tooltip look: compact, never wraps.
+(function addBusLabelStyle(){
+
+    const style = document.createElement("style");
+
+    style.textContent =
+        ".bus-label{font-size:12px;font-weight:600;line-height:1.35;" +
+        "white-space:nowrap;padding:3px 7px}";
+
+    if (document.head) document.head.appendChild(style);
+
+})();
+
 function initMap(stopKey, mapElementId){
 
     const stop = STOPS[stopKey];
@@ -702,6 +823,27 @@ function updateBusMap(stopKey, distanceElementId, focus){
     entry.busMarker.setOpacity(focus.stale ? 0.5 : 1);
     entry.busMarker.setPopupContent(popupText);
 
+    const delay = delayMinutes(focus);
+    const colour = badgeColour(delay, focus.stale);
+
+    if (entry.badgeColour !== colour) {
+        entry.busMarker.setIcon(buildBusIcon(colour));
+        entry.badgeColour = colour;
+    }
+
+    const labelHtml = busLabelHtml(stopKey, focus, delay);
+
+    if (entry.busMarker.getTooltip()) {
+        entry.busMarker.setTooltipContent(labelHtml);
+    } else {
+        entry.busMarker.bindTooltip(labelHtml, {
+            permanent: true,
+            direction: "top",
+            offset: [0, -14],
+            className: "bus-label"
+        });
+    }
+
     if (!entry.busVisible) {
         entry.busMarker.addTo(entry.map);
         entry.busVisible = true;
@@ -712,7 +854,7 @@ function updateBusMap(stopKey, distanceElementId, focus){
             [vehicle.lat, vehicle.lon],
             [stop.lat, stop.lon]
         ),
-        { padding: [30, 30], maxZoom: 15 }
+        { paddingTopLeft: [30, 60], paddingBottomRight: [30, 30], maxZoom: 15 }
     );
 
 }
@@ -980,11 +1122,18 @@ async function loadDashboard(){
     updateBusMap(OUTBOUND_STOP, "outboundDistance", outboundFocus);
     updateBusMap(INBOUND_STOP, "inboundDistance", inboundFocus);
 
+    const shortId = key => {
+        const id = tracked[key].tripId;
+        return id ? "…" + String(id).slice(-4) : "none";
+    };
+
     document.getElementById(
         "updated"
     ).textContent=
         "Last updated : "
-        + new Date().toLocaleTimeString("en-AU");
+        + new Date().toLocaleTimeString("en-AU")
+        + ` · v4 · tracking out ${shortId(OUTBOUND_STOP)}, in ${shortId(INBOUND_STOP)}`
+        + (restoredFromStorage ? " · restored" : "");
 
 }
 
