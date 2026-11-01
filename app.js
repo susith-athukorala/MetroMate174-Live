@@ -932,7 +932,9 @@ if (trip) {
 }
 else if (Math.abs(delay) <= 1) {
 
-    arrival += " 🟢 On time";
+    // "On time" only means something when the bus is out on the road.
+    // A prediction with no GPS position is usually just the timetable.
+    arrival += trip.vehicle ? " 🟢 On time" : " 🟡 Scheduled";
 
 }
 else if (delay > 0 && delay <= 5) {
