@@ -65,6 +65,8 @@ const GPS_LOST_LIMIT_MS = 6 * 60 * 1000;      // no GPS for this long: give up o
 const NO_GPS_AFTER_DUE_MS = 8 * 60 * 1000;    // never had GPS and now well past due: give up
 const MAX_TRACK_AFTER_DUE_MS = 25 * 60 * 1000; // absolute cap past the due time
 const RESTORE_MAX_AGE_MS = 25 * 60 * 1000;    // ignore saved tracking older than this
+const LIVE_ONLY_MAX_AHEAD_S = 20 * 60;   // feed-only bus (not in the timetable list): only adopt if due within 20 min
+const WRONG_TARGET_MS = 15 * 60 * 1000;  // tracked bus due this much later than the timetable's next bus = wrong one
 const PAST_DUE_MS = 2 * 60 * 1000;        // "past due" = this long after its due time
 const FAR_AWAY_KM = 1.0;                 // far enough that "not arriving" means something
 const STALL_WINDOW_MS = 4 * 60 * 1000;   // not getting closer over this long = stuck, parked or gone by
@@ -133,7 +135,7 @@ function restoreTracking(){
     } catch (e) { /* corrupt or unavailable storage — start fresh */ }
 }
 
-function releaseBus(stopKey){
+function releaseBus(stopKey, markDone = true){
 
     const state = tracked[stopKey];
 
@@ -141,7 +143,7 @@ function releaseBus(stopKey){
         d => d && d.id && Date.now() - d.at < DONE_TTL_MS
     );
 
-    if (state.tripId) {
+    if (state.tripId && markDone) {
         done.unshift({ id: String(state.tripId), at: Date.now() });
     }
 
@@ -253,6 +255,7 @@ function pickCandidate(stopKey, buses, trips){
 
     const fromRealtime = trips.find(t =>
         !isDone(stopKey, t.tripId) &&
+        t.arrival <= nowS + LIVE_ONLY_MAX_AHEAD_S &&
         (t.vehicle
             ? !looksPassed(t.vehicle, stop)
             : t.arrival >= nowS - COLD_START_NO_GPS_S)
@@ -304,6 +307,26 @@ function resolveFocusBus(stopKey, buses, realtime){
     const vehicles = (realtime && realtime.vehicles) || {};
 
     const nowMs = Date.now();
+
+    // A tracked bus due well after the timetable's next bus is the wrong
+    // target (for example picked while the timetable request had failed).
+    // Let it go without marking it done, so it can be picked up later.
+    if (state.tripId) {
+
+        const nextListed = buses.find(b => !isDone(stopKey, b.trip_id));
+
+        if (nextListed && String(nextListed.trip_id) !== String(state.tripId)) {
+
+            const listedMs = new Date(nextListed.arrival_time).getTime();
+
+            if (Number.isFinite(listedMs) &&
+                (state.dueMs || 0) - listedMs > WRONG_TARGET_MS) {
+                releaseBus(stopKey, false);
+            }
+
+        }
+
+    }
 
     if (state.tripId) {
 
