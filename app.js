@@ -65,6 +65,11 @@ const GPS_LOST_LIMIT_MS = 6 * 60 * 1000;      // no GPS for this long: give up o
 const NO_GPS_AFTER_DUE_MS = 8 * 60 * 1000;    // never had GPS and now well past due: give up
 const MAX_TRACK_AFTER_DUE_MS = 25 * 60 * 1000; // absolute cap past the due time
 const RESTORE_MAX_AGE_MS = 25 * 60 * 1000;    // ignore saved tracking older than this
+const PAST_DUE_MS = 2 * 60 * 1000;        // "past due" = this long after its due time
+const FAR_AWAY_KM = 1.0;                 // far enough that "not arriving" means something
+const STALL_WINDOW_MS = 4 * 60 * 1000;   // not getting closer over this long = stuck, parked or gone by
+const STALL_MIN_PROGRESS_KM = 0.15;      // must close at least this much in that window
+const SAMPLE_KEEP_MS = 6 * 60 * 1000;
 const WATCH_GAP_MS = 60 * 1000;      // we had no look at the bus for this long (phone asleep, feed gap)
 const COLD_START_NO_GPS_S = 5 * 60;  // new page, no GPS: only adopt if due within the last 5 min
 const DONE_TTL_MS = 90 * 60 * 1000;  // remember a finished trip this long (trip IDs repeat on later days)
@@ -77,6 +82,7 @@ function blankState(){
         dueMs: null,
         predMs: null,   // last live predicted arrival (null = never had one)
         minKm: null,
+        samples: [],    // recent {t, km} readings, for the 'not getting closer' check
         lastVehicle: null,
         lastSeen: null,
         lastTouched: null,
@@ -204,6 +210,20 @@ function looksPassed(vehicle, stop){
 
 }
 
+// True when the bus has not got closer to the stop over the last few
+// minutes (parked, a frozen GPS position, or it went by earlier).
+function notGettingCloser(state, km, nowMs){
+
+    const first = (state.samples || [])[0];
+
+    if (!first) return false;
+
+    if (nowMs - first.t < STALL_WINDOW_MS - 20 * 1000) return false;
+
+    return first.km - km < STALL_MIN_PROGRESS_KM;
+
+}
+
 // Has the tracked bus reached the stop and gone on past it?
 function hasPassed(state, vehicle, stop, km){
 
@@ -316,7 +336,24 @@ function resolveFocusBus(stopKey, buses, realtime){
                 ? km
                 : Math.min(state.minKm, km);
 
+            state.samples = (state.samples || [])
+                .filter(s => nowMs - s.t <= SAMPLE_KEEP_MS);
+
+            const stallBefore = notGettingCloser(state, km, nowMs);
+
+            state.samples.push({ t: nowMs, km });
+
             if (hasPassed(state, vehicle, stop, km)) release = true;
+
+            // Past its due time and still far from the stop: a bus that is
+            // heading away, or has not got closer for several minutes, is
+            // not arriving. (A late bus that is still approaching is kept.)
+            const pastDue = nowMs - (state.dueMs || nowMs) > PAST_DUE_MS;
+
+            if (pastDue && km > FAR_AWAY_KM &&
+                (movingAway(vehicle, stop) || stallBefore)) {
+                release = true;
+            }
 
             // If we lost sight of it for a while, it may have gone through
             // the stop zone unseen. Back in view and clearly heading away
@@ -360,6 +397,7 @@ function resolveFocusBus(stopKey, buses, realtime){
         state.snapshot = pick.bus;
         state.lockedAt = nowMs;
         state.minKm = null;
+        state.samples = [];
         state.lastVehicle = null;
         state.lastSeen = null;
         state.predMs = pick.trip ? pick.trip.arrival * 1000 : null;
