@@ -59,6 +59,8 @@ const APPROACH_KM = 0.15;            // within ~150 m: at / arriving at the stop
 const PASSED_MARGIN_KM = 0.15;       // this far beyond its closest point = it has gone past
 const FAR_PASS_KM = 0.6;             // GPS can skip the stop zone, so also check coarsely...
 const FAR_PASS_MARGIN_KM = 0.35;     // ...came this close, then moved this much further, heading away
+const NEAR_DUE_MS = 6 * 60 * 1000;   // "passed" guesses from distance only apply this close to the due time
+const BUILD = "2026-11-03a";
 const WAKE_PASS_MARGIN_KM = 1.0;     // heading away and this much further than closest point (e.g. phone slept)
 const GPS_STALE_MS = 30 * 1000;      // no fresh GPS for this long: show as "last seen"
 const GPS_LOST_LIMIT_MS = 6 * 60 * 1000;      // no GPS for this long: give up on the bus
@@ -227,7 +229,7 @@ function notGettingCloser(state, km, nowMs){
 }
 
 // Has the tracked bus reached the stop and gone on past it?
-function hasPassed(state, vehicle, stop, km){
+function hasPassed(state, vehicle, stop, km, nearDue){
 
     const min = state.minKm;
 
@@ -238,11 +240,13 @@ function hasPassed(state, vehicle, stop, km){
 
     // GPS fixes can skip the stop zone, so also catch "came close, then
     // clearly heading away".
-    if (min <= FAR_PASS_KM && km >= min + FAR_PASS_MARGIN_KM &&
+    // Only trusted near the due time: a bus far from its due time can
+    // be heading anywhere (e.g. leaving the depot).
+    if (nearDue && min <= FAR_PASS_KM && km >= min + FAR_PASS_MARGIN_KM &&
         movingAway(vehicle, stop)) return true;
 
     // Long gap (e.g. phone asleep): well beyond its closest point and heading away.
-    if (km >= min + WAKE_PASS_MARGIN_KM && movingAway(vehicle, stop)) return true;
+    if (nearDue && km >= min + WAKE_PASS_MARGIN_KM && movingAway(vehicle, stop)) return true;
 
     return false;
 
@@ -257,7 +261,7 @@ function pickCandidate(stopKey, buses, trips){
         !isDone(stopKey, t.tripId) &&
         t.arrival <= nowS + LIVE_ONLY_MAX_AHEAD_S &&
         (t.vehicle
-            ? !looksPassed(t.vehicle, stop)
+            ? (t.arrival > nowS + NEAR_DUE_MS / 1000 || !looksPassed(t.vehicle, stop))
             : t.arrival >= nowS - COLD_START_NO_GPS_S)
     );
 
@@ -366,7 +370,9 @@ function resolveFocusBus(stopKey, buses, realtime){
 
             state.samples.push({ t: nowMs, km });
 
-            if (hasPassed(state, vehicle, stop, km)) release = true;
+            const nearDue = (state.dueMs || nowMs) - nowMs < NEAR_DUE_MS;
+
+            if (hasPassed(state, vehicle, stop, km, nearDue)) release = true;
 
             // Past its due time and still far from the stop: a bus that is
             // heading away, or has not got closer for several minutes, is
@@ -381,7 +387,7 @@ function resolveFocusBus(stopKey, buses, realtime){
             // If we lost sight of it for a while, it may have gone through
             // the stop zone unseen. Back in view and clearly heading away
             // from the stop = it has passed.
-            if (unwatchedMs > WATCH_GAP_MS && looksPassed(vehicle, stop)) {
+            if (nearDue && unwatchedMs > WATCH_GAP_MS && looksPassed(vehicle, stop)) {
                 release = true;
             }
 
@@ -1195,7 +1201,7 @@ async function loadDashboard(){
     ).textContent=
         "Last updated : "
         + new Date().toLocaleTimeString("en-AU")
-        + ` · v4 · tracking out ${shortId(OUTBOUND_STOP)}, in ${shortId(INBOUND_STOP)}`
+        + ` · v4 ${BUILD} · tracking out ${shortId(OUTBOUND_STOP)}, in ${shortId(INBOUND_STOP)}`
         + (restoredFromStorage ? " · restored" : "");
 
 }
