@@ -60,7 +60,7 @@ const PASSED_MARGIN_KM = 0.15;       // this far beyond its closest point = it h
 const FAR_PASS_KM = 0.6;             // GPS can skip the stop zone, so also check coarsely...
 const FAR_PASS_MARGIN_KM = 0.35;     // ...came this close, then moved this much further, heading away
 const NEAR_DUE_MS = 6 * 60 * 1000;   // "passed" guesses from distance only apply this close to the due time
-const BUILD = "2026-11-03a";
+const BUILD = "2026-11-05a";
 const WAKE_PASS_MARGIN_KM = 1.0;     // heading away and this much further than closest point (e.g. phone slept)
 const GPS_STALE_MS = 30 * 1000;      // no fresh GPS for this long: show as "last seen"
 const GPS_LOST_LIMIT_MS = 6 * 60 * 1000;      // no GPS for this long: give up on the bus
@@ -807,6 +807,66 @@ function initMap(stopKey, mapElementId){
 
 }
 
+
+// -------------------------------
+// Your own position (blue dot)
+//
+// Uses the phone's location with permission. If it is refused or not
+// available, the maps simply work without it.
+// -------------------------------
+
+let userPos = null;
+
+function showUserOnMaps(){
+
+    if (!userPos) return;
+
+    for (const key of Object.keys(maps)) {
+
+        const entry = maps[key];
+
+        if (!entry.meMarker) {
+            entry.meMarker = L.circleMarker([userPos.lat, userPos.lon], {
+                radius: 8, color: "#ffffff", weight: 3,
+                fillColor: "#1a73e8", fillOpacity: 1
+            }).addTo(entry.map).bindPopup("You are here");
+            entry.meAccuracy = L.circle([userPos.lat, userPos.lon], {
+                radius: userPos.acc, color: "#1a73e8", weight: 1,
+                fillColor: "#1a73e8", fillOpacity: 0.12, interactive: false
+            }).addTo(entry.map);
+        } else {
+            entry.meMarker.setLatLng([userPos.lat, userPos.lon]);
+            entry.meAccuracy.setLatLng([userPos.lat, userPos.lon]);
+            entry.meAccuracy.setRadius(userPos.acc);
+        }
+
+    }
+
+}
+
+function startLocationWatch(){
+
+    try {
+
+        if (!navigator.geolocation) return;
+
+        navigator.geolocation.watchPosition(
+            pos => {
+                userPos = {
+                    lat: pos.coords.latitude,
+                    lon: pos.coords.longitude,
+                    acc: Math.min(pos.coords.accuracy || 50, 500)
+                };
+                showUserOnMaps();
+            },
+            () => { /* refused or unavailable: no blue dot */ },
+            { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 }
+        );
+
+    } catch (e) { /* ignore */ }
+
+}
+
 function updateBusMap(stopKey, distanceElementId, focus){
 
     const entry = maps[stopKey];
@@ -916,11 +976,19 @@ function updateBusMap(stopKey, distanceElementId, focus){
         entry.busVisible = true;
     }
 
+    const bounds = L.latLngBounds(
+        [vehicle.lat, vehicle.lon],
+        [stop.lat, stop.lon]
+    );
+
+    // Keep you in view too when you are close to the stop.
+    if (userPos && distanceKm(userPos.lat, userPos.lon, stop.lat, stop.lon) < 1.5 &&
+        bounds.extend) {
+        bounds.extend([userPos.lat, userPos.lon]);
+    }
+
     entry.map.fitBounds(
-        L.latLngBounds(
-            [vehicle.lat, vehicle.lon],
-            [stop.lat, stop.lon]
-        ),
+        bounds,
         { paddingTopLeft: [30, 60], paddingBottomRight: [30, 30], maxZoom: 15 }
     );
 
@@ -1214,6 +1282,7 @@ async function loadDashboard(){
 
 initMap(OUTBOUND_STOP, "outboundMap");
 initMap(INBOUND_STOP, "inboundMap");
+startLocationWatch();
 
 loadDashboard();
 
